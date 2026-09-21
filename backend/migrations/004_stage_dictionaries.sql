@@ -1,0 +1,22 @@
+INSERT INTO dictionaries (category, code, title_ru, sort_order) VALUES
+    ('muscle_group', 'neck', 'Шея', 1),
+    ('muscle_group', 'shoulders', 'Плечи', 2),
+    ('muscle_group', 'chest', 'Грудь', 3),
+    ('muscle_group', 'back', 'Спина', 4),
+    ('muscle_group', 'waist', 'Талия', 5),
+    ('muscle_group', 'glutes', 'Ягодицы', 6),
+    ('muscle_group', 'thighs', 'Бёдра', 7),
+    ('muscle_group', 'calves', 'Икры', 8),
+    ('muscle_group', 'biceps', 'Бицепс', 9),
+    ('muscle_group', 'triceps', 'Трицепс', 10),
+    ('muscle_group', 'forearms', 'Предплечья', 11),
+    ('muscle_group', 'other', 'Другое', 12),
+    ('workout_kind', 'strength', 'Силовая', 1),
+    ('workout_kind', 'functional', 'Функциональный', 2),
+    ('workout_kind', 'cardio', 'Кардио', 3),
+    ('workout_kind', 'stretching', 'Растяжка', 4),
+    ('workout_kind', 'circuit', 'Круговая', 5),
+    ('workout_kind', 'interval', 'Интервальная', 6),
+    ('workout_kind', 'rehab', 'Реабилитация', 7),
+    ('workout_kind', 'endurance', 'Выносливость', 8)
+ON CONFLICT (category, code) DO NOTHING;
