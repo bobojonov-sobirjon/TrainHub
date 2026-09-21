@@ -1,6 +1,7 @@
+from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.deps.roles import require_trainer
 from app.schemas.common import SuccessResponse, UserPublic
@@ -62,6 +63,73 @@ async def manual(payload: ClientManualIn, user: Annotated[UserPublic, Depends(re
 @router.get("/{link_id}", tags=["App - Clients"], summary="Карточка клиента")
 async def detail(link_id: int, user: Annotated[UserPublic, Depends(require_trainer)]) -> SuccessResponse[dict]:
     return SuccessResponse(data=await svc.get_client(user.id, link_id))
+
+
+@router.get(
+    "/{link_id}/measurements",
+    tags=["App - Clients"],
+    summary="История замеров клиента",
+)
+async def list_measurements(
+    link_id: int, user: Annotated[UserPublic, Depends(require_trainer)]
+) -> SuccessResponse[list]:
+    return SuccessResponse(data=await svc.list_measurements(user.id, link_id))
+
+
+@router.get(
+    "/{link_id}/measurements/chart",
+    tags=["App - Clients"],
+    summary="График замеров клиента",
+    description=(
+        "Метрика: `weight_kg`, `body_fat_pct`, `muscle_mass_kg`, `water_pct`, "
+        "`chest_cm`, `back_cm`, `waist_cm`, `hips_cm`, `thigh_cm`, `calf_cm`, "
+        "`neck_cm`, `shoulders_cm`, `arm_cm`, `forearm_cm`."
+    ),
+)
+async def measurements_chart(
+    link_id: int,
+    user: Annotated[UserPublic, Depends(require_trainer)],
+    metric: str = "weight_kg",
+    date_from: date | None = Query(default=None, alias="from", description="Начало периода YYYY-MM-DD"),
+    date_to: date | None = Query(default=None, alias="to", description="Конец периода YYYY-MM-DD"),
+) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await svc.measurements_chart(user.id, link_id, metric, date_from, date_to))
+
+
+@router.get(
+    "/{link_id}/notes",
+    tags=["App - Clients"],
+    summary="Заметки тренера по клиенту",
+)
+async def list_notes(link_id: int, user: Annotated[UserPublic, Depends(require_trainer)]) -> SuccessResponse[list]:
+    return SuccessResponse(data=await svc.list_notes(user.id, link_id))
+
+
+@router.get(
+    "/{link_id}/stats",
+    tags=["App - Clients"],
+    summary="Статистика клиента",
+    description="Сессии, календарь, замеры, дни в работе и последние показатели.",
+)
+async def client_stats(link_id: int, user: Annotated[UserPublic, Depends(require_trainer)]) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await svc.client_stats(user.id, link_id))
+
+
+@router.get(
+    "/{link_id}/sessions",
+    tags=["App - Clients"],
+    summary="Тренировки клиента",
+)
+async def client_sessions(
+    link_id: int,
+    user: Annotated[UserPublic, Depends(require_trainer)],
+    kind: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> SuccessResponse[Page[dict]]:
+    page, page_size, offset = page_args(page, page_size)
+    items, total = await svc.client_sessions(user.id, link_id, kind=kind, page_size=page_size, offset=offset)
+    return SuccessResponse(data=Page(items=items, total=total, page=page, page_size=page_size))
 
 
 @router.patch(

@@ -1,4 +1,9 @@
-from app.core.constants import CLIENT_SORT, CLIENT_STATUSES, FREE_CLIENT_LIMIT
+import json
+from datetime import date
+
+import asyncpg
+
+from app.core.constants import CLIENT_SORT, CLIENT_STATUSES, FREE_CLIENT_LIMIT, MEASUREMENT_METRICS, REQUEST_STATUSES
 from app.core.exceptions import AppError
 from app.core.security import hash_password
 from app.db.connection import execute, fetch, fetchrow
@@ -91,6 +96,7 @@ async def search_users(trainer_id: int, query: str) -> list[dict]:
     q = query.strip()
     if len(q) < 3:
         raise AppError("VALIDATION_ERROR", "Запрос должен содержать минимум 3 символа", http_status=422)
+    like = f"%{q}%"
     rows = await fetch(
         """
         SELECT
@@ -106,11 +112,15 @@ async def search_users(trainer_id: int, query: str) -> list[dict]:
             OR u.phone = $1
             OR u.public_id = $1
             OR u.phone LIKE '%' || $1
+            OR u.first_name ILIKE $3
+            OR u.last_name ILIKE $3
+            OR (u.first_name || ' ' || u.last_name) ILIKE $3
           )
         LIMIT 20
         """,
         q,
         trainer_id,
+        like,
     )
     return [dict(r) for r in rows]
 
@@ -120,13 +130,23 @@ async def add_existing(trainer_id: int, user_id: int) -> dict:
     if target is None:
         raise AppError("USER_NOT_FOUND", "Пользователь не найден", http_status=404)
     existing = await fetchrow(
-        "SELECT id FROM trainer_clients WHERE trainer_id = $1 AND client_id = $2",
+        "SELECT id, archived_at FROM trainer_clients WHERE trainer_id = $1 AND client_id = $2",
         trainer_id,
         user_id,
     )
-    if existing:
+    if existing and existing["archived_at"] is None:
         raise AppError("ALREADY_ADDED", "Клиент уже добавлен", http_status=409)
     await _assert_client_limit(trainer_id)
+    if existing:
+        await execute(
+            """
+            UPDATE trainer_clients
+            SET archived_at = NULL, status = 'new', invited_via = 'search'
+            WHERE id = $1
+            """,
+            existing["id"],
+        )
+        return await get_client(trainer_id, existing["id"])
     row = await fetchrow(
         """
         INSERT INTO trainer_clients (trainer_id, client_id, invited_via)
@@ -342,6 +362,366 @@ async def delete_note(trainer_id: int, link_id: int, note_id: int) -> None:
         "UPDATE trainer_notes SET deleted_at = NOW() WHERE id = $1 AND trainer_client_id = $2",
         note_id,
         link_id,
+    )
+
+
+async def _require_link(trainer_id: int, link_id: int) -> dict:
+    row = await fetchrow(
+        """
+        SELECT id, client_id, status, training_format, goals, created_at
+        FROM trainer_clients
+        WHERE id = $1 AND trainer_id = $2
+        """,
+        link_id,
+        trainer_id,
+    )
+    if row is None:
+        raise AppError("CLIENT_NOT_FOUND", "Клиент не найден", http_status=404)
+    return dict(row)
+
+
+async def list_measurements(trainer_id: int, link_id: int) -> list[dict]:
+    card = await _require_link(trainer_id, link_id)
+    rows = await fetch(
+        "SELECT * FROM body_measurements WHERE client_id = $1 ORDER BY recorded_at DESC",
+        card["client_id"],
+    )
+    return [dict(r) for r in rows]
+
+
+async def list_notes(trainer_id: int, link_id: int) -> list[dict]:
+    await _require_link(trainer_id, link_id)
+    rows = await fetch(
+        """
+        SELECT id, text, created_at, created_by
+        FROM trainer_notes
+        WHERE trainer_client_id = $1 AND deleted_at IS NULL
+        ORDER BY created_at DESC
+        """,
+        link_id,
+    )
+    return [dict(r) for r in rows]
+
+
+async def measurements_chart(
+    trainer_id: int,
+    link_id: int,
+    metric: str,
+    date_from: date | None,
+    date_to: date | None,
+) -> dict:
+    if metric not in MEASUREMENT_METRICS:
+        raise AppError("VALIDATION_ERROR", "Некорректная метрика замера", http_status=422)
+    if date_from and date_to and date_from > date_to:
+        raise AppError("VALIDATION_ERROR", "Дата начала не может быть позже даты окончания", http_status=422)
+    card = await _require_link(trainer_id, link_id)
+    args: list = [card["client_id"]]
+    where = [f"{metric} IS NOT NULL"]
+    if date_from:
+        args.append(date_from)
+        where.append(f"recorded_at::date >= ${len(args)}")
+    if date_to:
+        args.append(date_to)
+        where.append(f"recorded_at::date <= ${len(args)}")
+    where_sql = " AND ".join(where)
+    rows = await fetch(
+        f"""
+        SELECT recorded_at, {metric} AS value
+        FROM body_measurements
+        WHERE client_id = $1 AND {where_sql}
+        ORDER BY recorded_at ASC
+        """,
+        *args,
+    )
+    return {
+        "metric": metric,
+        "from": date_from,
+        "to": date_to,
+        "points": [{"recorded_at": r["recorded_at"], "value": r["value"]} for r in rows],
+    }
+
+
+async def client_stats(trainer_id: int, link_id: int) -> dict:
+    card = await _require_link(trainer_id, link_id)
+    client_id = card["client_id"]
+    sessions = await fetchrow(
+        """
+        SELECT
+            COUNT(*) AS sessions_total,
+            COUNT(*) FILTER (WHERE s.status = 'completed') AS sessions_completed,
+            COALESCE(SUM(s.duration_sec) FILTER (WHERE s.status = 'completed'), 0) AS duration_sec_total,
+            COALESCE(SUM(s.calories) FILTER (WHERE s.status = 'completed'), 0) AS calories_total,
+            MAX(s.finished_at) FILTER (WHERE s.status = 'completed') AS last_session_at
+        FROM workout_sessions s
+        WHERE s.lead_client_id = $1
+           OR EXISTS (
+               SELECT 1 FROM workout_session_clients c
+               WHERE c.session_id = s.id AND c.client_id = $1
+           )
+        """,
+        client_id,
+    )
+    calendar = await fetchrow(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE status IN ('scheduled', 'in_progress', 'completed')) AS planned,
+            COUNT(*) FILTER (WHERE status = 'completed') AS completed,
+            COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled
+        FROM calendar_events
+        WHERE trainer_id = $1 AND client_id = $2
+        """,
+        trainer_id,
+        client_id,
+    )
+    last_m = await fetchrow(
+        """
+        SELECT recorded_at, weight_kg, body_fat_pct, muscle_mass_kg
+        FROM body_measurements
+        WHERE client_id = $1
+        ORDER BY recorded_at DESC
+        LIMIT 1
+        """,
+        client_id,
+    )
+    m_count = await fetchrow(
+        "SELECT COUNT(*) AS total FROM body_measurements WHERE client_id = $1",
+        client_id,
+    )
+    notes_count = await fetchrow(
+        "SELECT COUNT(*) AS total FROM trainer_notes WHERE trainer_client_id = $1 AND deleted_at IS NULL",
+        link_id,
+    )
+    days_together = max(0, (date.today() - card["created_at"].date()).days)
+    return {
+        "status": card["status"],
+        "days_together": days_together,
+        "sessions_total": int(sessions["sessions_total"]),
+        "sessions_completed": int(sessions["sessions_completed"]),
+        "duration_sec_total": int(sessions["duration_sec_total"] or 0),
+        "calories_total": int(sessions["calories_total"] or 0),
+        "last_session_at": sessions["last_session_at"],
+        "calendar_planned": int(calendar["planned"]),
+        "calendar_completed": int(calendar["completed"]),
+        "calendar_cancelled": int(calendar["cancelled"]),
+        "measurements_count": int(m_count["total"]),
+        "notes_count": int(notes_count["total"]),
+        "last_measurement": dict(last_m) if last_m else None,
+    }
+
+
+async def client_sessions(
+    trainer_id: int,
+    link_id: int,
+    *,
+    kind: str | None,
+    page_size: int,
+    offset: int,
+) -> tuple[list[dict], int]:
+    card = await _require_link(trainer_id, link_id)
+    args: list = [card["client_id"]]
+    where = [
+        "(s.lead_client_id = $1 OR EXISTS (SELECT 1 FROM workout_session_clients c WHERE c.session_id = s.id AND c.client_id = $1))"
+    ]
+    if kind:
+        args.append(kind)
+        where.append(f"${len(args)} = ANY(s.kinds)")
+    where_sql = " AND ".join(where)
+    total = await fetchrow(
+        f"SELECT COUNT(*) AS total FROM workout_sessions s WHERE {where_sql}",
+        *args,
+    )
+    args.extend([page_size, offset])
+    rows = await fetch(
+        f"""
+        SELECT s.id, s.source, s.kinds, s.status, s.started_at, s.finished_at, s.duration_sec, s.calories, s.trainer_id
+        FROM workout_sessions s
+        WHERE {where_sql}
+        ORDER BY COALESCE(s.finished_at, s.started_at, s.created_at) DESC
+        LIMIT ${len(args) - 1} OFFSET ${len(args)}
+        """,
+        *args,
+    )
+    return [dict(r) for r in rows], int(total["total"])
+
+
+async def list_requests(trainer_id: int, status: str | None, page_size: int, offset: int) -> tuple[list[dict], int]:
+    if status in (None, "", "all"):
+        status = None
+    elif status not in REQUEST_STATUSES:
+        raise AppError("VALIDATION_ERROR", "Некорректный статус заявки", http_status=422)
+    args: list = [trainer_id]
+    where = ["cr.trainer_id = $1"]
+    if status:
+        args.append(status)
+        where.append(f"cr.status = ${len(args)}")
+    where_sql = " AND ".join(where)
+    total = await fetchrow(
+        f"SELECT COUNT(*) AS total FROM client_requests cr WHERE {where_sql}",
+        *args,
+    )
+    args.extend([page_size, offset])
+    rows = await fetch(
+        f"""
+        SELECT
+            cr.id, cr.status, cr.created_at,
+            u.id AS client_id, u.public_id, u.first_name, u.last_name,
+            u.avatar_url, u.gender, u.phone, u.email
+        FROM client_requests cr
+        JOIN users u ON u.id = cr.client_id
+        WHERE {where_sql}
+        ORDER BY cr.created_at DESC
+        LIMIT ${len(args) - 1} OFFSET ${len(args)}
+        """,
+        *args,
+    )
+    return [dict(r) for r in rows], int(total["total"])
+
+
+async def _get_request(trainer_id: int, request_id: int) -> dict:
+    row = await fetchrow(
+        """
+        SELECT
+            cr.id, cr.trainer_id, cr.client_id, cr.status, cr.created_at,
+            u.public_id, u.first_name, u.last_name, u.avatar_url, u.gender, u.phone, u.email
+        FROM client_requests cr
+        JOIN users u ON u.id = cr.client_id
+        WHERE cr.id = $1 AND cr.trainer_id = $2
+        """,
+        request_id,
+        trainer_id,
+    )
+    if row is None:
+        raise AppError("REQUEST_NOT_FOUND", "Заявка не найдена", http_status=404)
+    return dict(row)
+
+
+async def _link_client_from_request(trainer_id: int, client_id: int) -> int:
+    existing = await fetchrow(
+        "SELECT id, archived_at FROM trainer_clients WHERE trainer_id = $1 AND client_id = $2",
+        trainer_id,
+        client_id,
+    )
+    if existing and existing["archived_at"] is None:
+        return int(existing["id"])
+    await _assert_client_limit(trainer_id)
+    if existing:
+        await execute(
+            """
+            UPDATE trainer_clients
+            SET archived_at = NULL, status = 'new', invited_via = 'request'
+            WHERE id = $1
+            """,
+            existing["id"],
+        )
+        return int(existing["id"])
+    row = await fetchrow(
+        """
+        INSERT INTO trainer_clients (trainer_id, client_id, invited_via)
+        VALUES ($1, $2, 'request')
+        RETURNING id
+        """,
+        trainer_id,
+        client_id,
+    )
+    return int(row["id"])
+
+
+async def accept_request(trainer_id: int, request_id: int) -> dict:
+    req = await _get_request(trainer_id, request_id)
+    if req["status"] != "pending":
+        raise AppError("REQUEST_ALREADY_PROCESSED", "Заявка уже обработана", http_status=409)
+    link_id = await _link_client_from_request(trainer_id, req["client_id"])
+    await execute(
+        "UPDATE client_requests SET status = 'accepted' WHERE id = $1",
+        request_id,
+    )
+    data = await _get_request(trainer_id, request_id)
+    data["trainer_client_id"] = link_id
+    data["client"] = await get_client(trainer_id, link_id)
+    return data
+
+
+async def reject_request(trainer_id: int, request_id: int) -> dict:
+    req = await _get_request(trainer_id, request_id)
+    if req["status"] != "pending":
+        raise AppError("REQUEST_ALREADY_PROCESSED", "Заявка уже обработана", http_status=409)
+    await execute(
+        "UPDATE client_requests SET status = 'rejected' WHERE id = $1",
+        request_id,
+    )
+    return await _get_request(trainer_id, request_id)
+
+
+async def create_request(client_id: int, trainer_id: int) -> dict:
+    if client_id == trainer_id:
+        raise AppError("VALIDATION_ERROR", "Нельзя отправить заявку самому себе", http_status=422)
+    trainer = await fetchrow(
+        """
+        SELECT u.id FROM users u
+        JOIN user_roles ur ON ur.user_id = u.id AND ur.role = 'trainer'
+        WHERE u.id = $1 AND u.is_blocked = FALSE AND u.is_active = TRUE
+        """,
+        trainer_id,
+    )
+    if trainer is None:
+        raise AppError("TRAINER_NOT_FOUND", "Тренер не найден", http_status=404)
+    linked = await fetchrow(
+        """
+        SELECT id FROM trainer_clients
+        WHERE trainer_id = $1 AND client_id = $2 AND archived_at IS NULL
+        """,
+        trainer_id,
+        client_id,
+    )
+    if linked:
+        raise AppError("ALREADY_ADDED", "Вы уже являетесь клиентом этого тренера", http_status=409)
+    pending = await fetchrow(
+        """
+        SELECT id FROM client_requests
+        WHERE trainer_id = $1 AND client_id = $2 AND status = 'pending'
+        """,
+        trainer_id,
+        client_id,
+    )
+    if pending:
+        raise AppError("ALREADY_REQUESTED", "Заявка уже отправлена", http_status=409)
+    try:
+        row = await fetchrow(
+            """
+            INSERT INTO client_requests (trainer_id, client_id)
+            VALUES ($1, $2)
+            RETURNING id, trainer_id, client_id, status, created_at
+            """,
+            trainer_id,
+            client_id,
+        )
+    except asyncpg.UniqueViolationError:
+        raise AppError("ALREADY_REQUESTED", "Заявка уже отправлена", http_status=409) from None
+    await _notify_new_request(trainer_id, client_id, row["id"])
+    return dict(row)
+
+
+async def _notify_new_request(trainer_id: int, client_id: int, request_id: int) -> None:
+    prefs = await fetchrow(
+        "SELECT new_client_request FROM notification_preferences WHERE user_id = $1",
+        trainer_id,
+    )
+    if prefs is not None and not prefs["new_client_request"]:
+        return
+    client = await fetchrow(
+        "SELECT first_name, last_name FROM users WHERE id = $1",
+        client_id,
+    )
+    name = f"{client['first_name']} {client['last_name']}".strip() if client else "Клиент"
+    await execute(
+        """
+        INSERT INTO notifications (user_id, type, title, body, payload_json)
+        VALUES ($1, 'new_client_request', $2, $3, $4::jsonb)
+        """,
+        trainer_id,
+        "Новая заявка клиента",
+        f"{name} отправил(а) заявку",
+        json.dumps({"request_id": request_id, "client_id": client_id}),
     )
 
 

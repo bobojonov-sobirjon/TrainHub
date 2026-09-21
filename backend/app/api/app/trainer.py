@@ -2,10 +2,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.deps.roles import require_trainer
+from app.deps.roles import require_client, require_trainer
 from app.schemas.common import SuccessResponse, UserPublic
 from app.schemas.pagination import Page, page_args
 from app.schemas.stage import TrainerProfileIn
+from app.services import clients as client_svc
 from app.services import trainers as svc
 
 router = APIRouter()
@@ -69,3 +70,56 @@ async def trainers(
 @router.get("/trainers/{trainer_id}", tags=["App - Trainers"], summary="Публичный профиль тренера")
 async def trainer_detail(trainer_id: int) -> SuccessResponse[dict]:
     return SuccessResponse(data=await svc.public_trainer(trainer_id))
+
+
+@router.post(
+    "/trainers/{trainer_id}/request",
+    tags=["App - Trainers"],
+    summary="Отправить заявку тренеру",
+    description="Тело запроса не требуется. Клиент отправляет заявку выбранному тренеру.",
+)
+async def request_trainer(
+    trainer_id: int, user: Annotated[UserPublic, Depends(require_client)]
+) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await client_svc.create_request(user.id, trainer_id))
+
+
+@router.get(
+    "/trainer/requests",
+    tags=["App - Clients"],
+    summary="Заявки клиентов",
+    description="Новые заявки на добавление к тренеру. По умолчанию статус `pending`.",
+)
+async def list_requests(
+    user: Annotated[UserPublic, Depends(require_trainer)],
+    status: str | None = "pending",
+    page: int = 1,
+    page_size: int = 20,
+) -> SuccessResponse[Page[dict]]:
+    page, page_size, offset = page_args(page, page_size)
+    items, total = await client_svc.list_requests(user.id, status, page_size, offset)
+    return SuccessResponse(data=Page(items=items, total=total, page=page, page_size=page_size))
+
+
+@router.post(
+    "/trainer/requests/{request_id}/accept",
+    tags=["App - Clients"],
+    summary="Принять заявку клиента",
+    description="Тело запроса не требуется. Создаёт связь тренер–клиент (`invited_via=request`).",
+)
+async def accept_request(
+    request_id: int, user: Annotated[UserPublic, Depends(require_trainer)]
+) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await client_svc.accept_request(user.id, request_id))
+
+
+@router.post(
+    "/trainer/requests/{request_id}/reject",
+    tags=["App - Clients"],
+    summary="Отклонить заявку клиента",
+    description="Тело запроса не требуется.",
+)
+async def reject_request(
+    request_id: int, user: Annotated[UserPublic, Depends(require_trainer)]
+) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await client_svc.reject_request(user.id, request_id))

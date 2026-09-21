@@ -20,6 +20,25 @@ CLIENT_SORT = {
     "alpha": "u.last_name ASC, u.first_name ASC",
 }
 
+REQUEST_STATUSES = {"pending", "accepted", "rejected"}
+
+MEASUREMENT_METRICS = {
+    "weight_kg",
+    "body_fat_pct",
+    "muscle_mass_kg",
+    "water_pct",
+    "chest_cm",
+    "back_cm",
+    "waist_cm",
+    "hips_cm",
+    "thigh_cm",
+    "calf_cm",
+    "neck_cm",
+    "shoulders_cm",
+    "arm_cm",
+    "forearm_cm",
+}
+
 SESSION_SORT = {
     "newest": "s.created_at DESC",
     "oldest": "s.created_at ASC",
