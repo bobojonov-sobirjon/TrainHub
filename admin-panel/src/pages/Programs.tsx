@@ -7,6 +7,7 @@ import { IconArchive, IconBtn, IconOpen } from "../components/IconBtn";
 import { Modal } from "../components/Modal";
 import { Notice } from "../components/Notice";
 import { Select } from "../components/Select";
+import { ImageField } from "../components/MediaFields";
 import { Badge, EntityCell } from "../components/Ui";
 import { useFlashSuccess } from "../hooks/useFlashSuccess";
 import { apiError } from "../lib/apiError";
@@ -24,6 +25,7 @@ const emptyProgram = {
   workoutsPerWeek: "",
   durationWeeks: "",
   isPro: false,
+  cover: [] as File[],
 };
 
 export function ProgramsPage() {
@@ -55,7 +57,7 @@ export function ProgramsPage() {
     setSuccess("");
     setSaving(true);
     try {
-      await adminApi.createProgram({
+      const created = await adminApi.createProgram({
         title: form.title.trim(),
         description: form.description.trim() || null,
         level: form.level,
@@ -67,6 +69,10 @@ export function ProgramsPage() {
         is_pro: form.isPro,
         source: "catalog",
       });
+      const id = Number(created.data?.data?.id);
+      if (id && form.cover[0]) {
+        await adminApi.uploadProgramCover(id, form.cover[0]);
+      }
       closeModal();
       await queryClient.invalidateQueries({ queryKey: ["admin-programs"] });
       setSuccess("Программа создана");
@@ -237,6 +243,14 @@ export function ProgramsPage() {
             />
             PRO-программа
           </label>
+          <ImageField
+            id="program-create-cover"
+            label="Обложка"
+            hint="Одно изображение обложки: JPG, PNG, WEBP или GIF."
+            multiple={false}
+            files={form.cover}
+            onFiles={(cover) => setForm((current) => ({ ...current, cover }))}
+          />
           <div className="modal-actions">
             <button type="button" className="ghost" onClick={closeModal}>
               Отмена

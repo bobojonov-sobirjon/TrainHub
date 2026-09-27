@@ -1,12 +1,15 @@
+import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 
+from app.core.exceptions import AppError
 from app.deps.auth import get_admin_user
 from app.schemas.common import SuccessResponse, UserPublic
 from app.schemas.pagination import Page, page_args
 from app.schemas.stage import ExerciseCreateIn, ProgramCreateIn, ProgramDayExerciseIn, ProgramDayIn
 from app.services import catalog as cat
+from app.services.storage import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, save_bytes
 
 router = APIRouter()
 
@@ -187,32 +190,116 @@ async def exercise_detail(
     return SuccessResponse(data=await cat.get_exercise(exercise_id))
 
 
+async def _save_media(files: list[UploadFile] | None, folder: str, allowed: set[str]) -> list[str]:
+    urls: list[str] = []
+    for upload in files or []:
+        if not upload or not upload.filename:
+            continue
+        data = await upload.read()
+        urls.append(await save_bytes(data, folder=folder, filename=upload.filename, allowed=allowed))
+    return urls
+
+
+def _csv_list(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    raw = raw.strip()
+    if raw.startswith("["):
+        try:
+            parsed = json.loads(raw)
+            return [str(item) for item in parsed if str(item).strip()]
+        except json.JSONDecodeError:
+            pass
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 @router.post(
     "/exercises",
     tags=["Admin - Exercises"],
     summary="Создать публичное упражнение",
-    description="Упражнение сразу публичное. Коды мышц и оборудования — из справочников.",
+    description="multipart/form-data. Фото — несколько изображений, видео — один файл.",
 )
 async def create_exercise(
-    payload: ExerciseCreateIn,
     _user: Annotated[UserPublic, Depends(get_admin_user)],
+    name: str = Form(..., description="Название"),
+    primary_muscle: str | None = Form(None),
+    equipment: str | None = Form(None),
+    exercise_type: str = Form("strength"),
+    secondary_muscles: str = Form("", description="Коды мышц через запятую или JSON"),
+    photos: list[UploadFile] | None = File(None, description="Фото, можно несколько"),
+    video: UploadFile | None = File(None, description="Видео MP4/MOV/WEBM"),
 ) -> SuccessResponse[dict]:
+    payload = ExerciseCreateIn(
+        name=name,
+        primary_muscle=primary_muscle or None,
+        equipment=equipment or None,
+        exercise_type=exercise_type,
+        secondary_muscles=_csv_list(secondary_muscles),
+    )
     created = await cat.create_exercise(None, payload, is_public=True)
-    return SuccessResponse(data=created)
+    photo_urls = await _save_media(photos, f"exercises/{created['id']}", IMAGE_EXTENSIONS)
+    video_urls = await _save_media([video] if video else [], f"exercises/{created['id']}/video", VIDEO_EXTENSIONS)
+    data = await cat.set_exercise_media(created["id"], photo_urls, video_urls[0] if video_urls else None)
+    return SuccessResponse(data=data)
 
 
 @router.patch(
     "/exercises/{exercise_id}",
     tags=["Admin - Exercises"],
     summary="Изменить упражнение",
-    description="Полная модель: название, мышцы, оборудование, тип, URL медиа.",
+    description="multipart/form-data. `keep_photos` — JSON-массив уже сохранённых URL. Новые фото добавляются. Видео заменяется файлом.",
 )
 async def update_exercise(
     exercise_id: int,
-    payload: ExerciseCreateIn,
     _user: Annotated[UserPublic, Depends(get_admin_user)],
+    name: str = Form(...),
+    primary_muscle: str | None = Form(None),
+    equipment: str | None = Form(None),
+    exercise_type: str = Form("strength"),
+    secondary_muscles: str = Form(""),
+    keep_photos: str = Form("[]", description="JSON-массив оставшихся фото URL"),
+    photos: list[UploadFile] | None = File(None),
+    video: UploadFile | None = File(None),
+    clear_video: bool = Form(False),
 ) -> SuccessResponse[dict]:
-    return SuccessResponse(data=await cat.admin_update_exercise(exercise_id, payload))
+    payload = ExerciseCreateIn(
+        name=name,
+        primary_muscle=primary_muscle or None,
+        equipment=equipment or None,
+        exercise_type=exercise_type,
+        secondary_muscles=_csv_list(secondary_muscles),
+    )
+    current = await cat.admin_update_exercise(exercise_id, payload)
+    kept = _csv_list(keep_photos)
+    added = await _save_media(photos, f"exercises/{exercise_id}", IMAGE_EXTENSIONS)
+    video_url = current.get("video_url")
+    if clear_video:
+        video_url = None
+    new_video = await _save_media([video] if video else [], f"exercises/{exercise_id}/video", VIDEO_EXTENSIONS)
+    if new_video:
+        video_url = new_video[0]
+    data = await cat.set_exercise_media(exercise_id, kept + added, video_url)
+    return SuccessResponse(data=data)
+
+
+@router.post(
+    "/programs/{program_id}/cover",
+    tags=["Admin - Programs"],
+    summary="Обложка программы",
+    description="multipart/form-data. Одно изображение. `clear=true` снимает обложку.",
+)
+async def upload_program_cover(
+    program_id: int,
+    _user: Annotated[UserPublic, Depends(get_admin_user)],
+    file: UploadFile | None = File(None),
+    clear: bool = Form(False),
+) -> SuccessResponse[dict]:
+    if clear:
+        return SuccessResponse(data=await cat.set_program_cover(program_id, None))
+    if file is None or not file.filename:
+        raise AppError("FILE_REQUIRED", "Загрузите изображение обложки", http_status=400)
+    urls = await _save_media([file], f"programs/{program_id}", IMAGE_EXTENSIONS)
+    return SuccessResponse(data=await cat.set_program_cover(program_id, urls[0]))
 
 
 @router.delete(

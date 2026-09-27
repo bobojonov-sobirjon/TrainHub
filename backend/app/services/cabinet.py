@@ -8,11 +8,23 @@ from app.services.storage import save_bytes
 
 
 async def home(user_id: int) -> dict:
+    profile = await fetchrow(
+        "SELECT created_at, weight_goal_kg FROM users WHERE id = $1",
+        user_id,
+    )
     last_m = await fetchrow(
         """
         SELECT weight_kg, body_fat_pct, recorded_at
         FROM body_measurements WHERE client_id = $1
         ORDER BY recorded_at DESC LIMIT 1
+        """,
+        user_id,
+    )
+    first_m = await fetchrow(
+        """
+        SELECT weight_kg FROM body_measurements
+        WHERE client_id = $1 AND weight_kg IS NOT NULL
+        ORDER BY recorded_at ASC LIMIT 1
         """,
         user_id,
     )
@@ -27,15 +39,43 @@ async def home(user_id: int) -> dict:
     )
     last_s = await fetchrow(
         """
-        SELECT id, duration_sec, calories, finished_at
-        FROM workout_sessions
-        WHERE status = 'completed' AND (lead_client_id = $1 OR EXISTS (
-            SELECT 1 FROM workout_session_clients c WHERE c.session_id = workout_sessions.id AND c.client_id = $1
+        SELECT s.id, s.duration_sec, s.calories, s.finished_at, s.kinds,
+               t.first_name AS trainer_first, t.last_name AS trainer_last,
+               (
+                   SELECT COUNT(*) FROM session_exercises se WHERE se.session_id = s.id
+               ) AS exercises_count,
+               (
+                   SELECT COUNT(*) FROM session_sets ss
+                   JOIN session_exercises se ON se.id = ss.session_exercise_id
+                   WHERE se.session_id = s.id
+               ) AS sets_count
+        FROM workout_sessions s
+        LEFT JOIN users t ON t.id = s.trainer_id
+        WHERE s.status = 'completed' AND (s.lead_client_id = $1 OR EXISTS (
+            SELECT 1 FROM workout_session_clients c WHERE c.session_id = s.id AND c.client_id = $1
         ))
-        ORDER BY finished_at DESC NULLS LAST LIMIT 1
+        ORDER BY s.finished_at DESC NULLS LAST LIMIT 1
         """,
         user_id,
     )
+    top_sets = []
+    if last_s:
+        top_sets = [
+            dict(r)
+            for r in await fetch(
+                """
+                SELECT e.name, MAX(ss.weight_kg) AS weight_kg, MAX(ss.reps) AS reps
+                FROM session_exercises se
+                JOIN exercises e ON e.id = se.exercise_id
+                JOIN session_sets ss ON ss.session_exercise_id = se.id
+                WHERE se.session_id = $1 AND ss.weight_kg IS NOT NULL
+                GROUP BY e.name
+                ORDER BY MAX(ss.weight_kg) DESC
+                LIMIT 3
+                """,
+                last_s["id"],
+            )
+        ]
     attendance = await fetch(
         """
         SELECT starts_at::date AS date, status
@@ -45,20 +85,69 @@ async def home(user_id: int) -> dict:
         """,
         user_id,
     )
-    first = await fetchrow(
-        "SELECT created_at FROM users WHERE id = $1",
+    streak_rows = await fetch(
+        """
+        SELECT DISTINCT COALESCE(finished_at, created_at)::date AS day
+        FROM workout_sessions
+        WHERE status = 'completed'
+          AND (lead_client_id = $1 OR EXISTS (
+              SELECT 1 FROM workout_session_clients c
+              WHERE c.session_id = workout_sessions.id AND c.client_id = $1
+          ))
+        ORDER BY day DESC
+        LIMIT 60
+        """,
         user_id,
     )
+    days_done = {r["day"] for r in streak_rows}
+    streak = 0
+    cursor = date.today()
+    if cursor not in days_done:
+        cursor = date.fromordinal(cursor.toordinal() - 1)
+    while cursor in days_done:
+        streak += 1
+        cursor = date.fromordinal(cursor.toordinal() - 1)
+
     days = 0
-    if first:
-        days = max(0, (date.today() - first["created_at"].date()).days)
+    if profile:
+        days = max(0, (date.today() - profile["created_at"].date()).days)
+    goal = profile["weight_goal_kg"] if profile else None
+    current_w = last_m["weight_kg"] if last_m else None
+    start_w = first_m["weight_kg"] if first_m else None
+    progress_pct = None
+    weight_delta_30d = None
+    if current_w is not None and goal is not None and start_w is not None and goal != start_w:
+        progress_pct = float((current_w - start_w) / (goal - start_w) * 100)
+        progress_pct = max(0, min(100, round(progress_pct, 1)))
+    if chart:
+        oldest = chart[-1]["weight_kg"]
+        newest = chart[0]["weight_kg"]
+        if oldest is not None and newest is not None:
+            weight_delta_30d = newest - oldest
+    unread = await fetchrow(
+        "SELECT COUNT(*) AS total FROM notifications WHERE user_id = $1 AND is_read = FALSE",
+        user_id,
+    )
+    notes = await list_trainer_notes(user_id)
+    last_session = dict(last_s) if last_s else None
+    if last_session:
+        last_session["top_sets"] = top_sets
+        last_session["trainer_name"] = " ".join(
+            part for part in [last_session.pop("trainer_first", None), last_session.pop("trainer_last", None)] if part
+        ) or None
     return {
-        "weight_kg": last_m["weight_kg"] if last_m else None,
+        "weight_kg": current_w,
         "body_fat_pct": last_m["body_fat_pct"] if last_m else None,
+        "weight_goal_kg": goal,
+        "progress_pct": progress_pct,
+        "weight_delta_30d": weight_delta_30d,
+        "streak": streak,
+        "unread_count": int(unread["total"]) if unread else 0,
         "days_in_program": days,
         "weight_chart": [dict(r) for r in reversed(chart)],
         "attendance_30d": [dict(r) for r in attendance],
-        "last_session": dict(last_s) if last_s else None,
+        "last_session": last_session,
+        "trainer_notes": notes[:5],
     }
 
 
@@ -75,8 +164,9 @@ async def add_own_measurement(user_id: int, payload: MeasurementIn) -> dict:
         """
         INSERT INTO body_measurements (
             client_id, recorded_by, weight_kg, body_fat_pct, muscle_mass_kg, water_pct,
-            chest_cm, back_cm, waist_cm, hips_cm, thigh_cm, calf_cm, neck_cm, shoulders_cm, arm_cm, forearm_cm
-        ) VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+            chest_cm, back_cm, waist_cm, hips_cm, thigh_cm, calf_cm, neck_cm, shoulders_cm,
+            arm_cm, arm_left_cm, arm_right_cm, forearm_cm
+        ) VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
         RETURNING id
         """,
         user_id,
@@ -93,9 +183,84 @@ async def add_own_measurement(user_id: int, payload: MeasurementIn) -> dict:
         payload.neck_cm,
         payload.shoulders_cm,
         payload.arm_cm,
+        payload.arm_left_cm,
+        payload.arm_right_cm,
         payload.forearm_cm,
     )
     return {"id": row["id"]}
+
+
+async def patch_measurement(user_id: int, measurement_id: int, payload: MeasurementIn) -> dict:
+    data = payload.model_dump(exclude_unset=True)
+    if not data:
+        raise AppError("VALIDATION_ERROR", "Нет полей для обновления", http_status=422)
+    row = await fetchrow(
+        "SELECT id FROM body_measurements WHERE id = $1 AND client_id = $2",
+        measurement_id,
+        user_id,
+    )
+    if row is None:
+        raise AppError("MEASUREMENT_NOT_FOUND", "Замер не найден", http_status=404)
+    sets = []
+    args: list = [measurement_id, user_id]
+    for key, value in data.items():
+        args.append(value)
+        sets.append(f"{key} = ${len(args)}")
+    await execute(
+        f"UPDATE body_measurements SET {', '.join(sets)} WHERE id = $1 AND client_id = $2",
+        *args,
+    )
+    updated = await fetchrow("SELECT * FROM body_measurements WHERE id = $1", measurement_id)
+    return dict(updated)
+
+
+async def measurements_chart(user_id: int, metric: str) -> dict:
+    from app.core.constants import MEASUREMENT_METRICS
+
+    if metric not in MEASUREMENT_METRICS:
+        raise AppError("VALIDATION_ERROR", "Некорректная метрика", http_status=422)
+    rows = await fetch(
+        f"""
+        SELECT recorded_at::date AS date, {metric} AS value
+        FROM body_measurements
+        WHERE client_id = $1 AND {metric} IS NOT NULL
+        ORDER BY recorded_at ASC
+        """,
+        user_id,
+    )
+    return {"metric": metric, "points": [dict(r) for r in rows]}
+
+
+async def list_trainer_notes(user_id: int) -> list[dict]:
+    rows = await fetch(
+        """
+        SELECT tn.id, tn.text, tn.created_at, tc.trainer_id,
+               u.first_name AS trainer_first, u.last_name AS trainer_last
+        FROM trainer_notes tn
+        JOIN trainer_clients tc ON tc.id = tn.trainer_client_id
+        JOIN users u ON u.id = tc.trainer_id
+        WHERE tc.client_id = $1 AND tn.deleted_at IS NULL
+        ORDER BY tn.created_at DESC
+        LIMIT 50
+        """,
+        user_id,
+    )
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["trainer_name"] = " ".join(
+            part for part in [item.pop("trainer_first", None), item.pop("trainer_last", None)] if part
+        )
+        items.append(item)
+    return items
+
+
+async def unread_count(user_id: int) -> dict:
+    row = await fetchrow(
+        "SELECT COUNT(*) AS total FROM notifications WHERE user_id = $1 AND is_read = FALSE",
+        user_id,
+    )
+    return {"unread_count": int(row["total"]) if row else 0}
 
 
 async def progress(user_id: int) -> dict:

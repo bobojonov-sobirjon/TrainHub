@@ -12,18 +12,19 @@ from app.services import sessions as sess
 router = APIRouter(prefix="/trainer/calendar")
 
 
-@router.get("", tags=["App - Calendar"], summary="События календаря")
+@router.get("", tags=["Coach - Calendar"], summary="События календаря")
 async def list_events(
     user: Annotated[UserPublic, Depends(require_trainer)],
     date_from: datetime | None = None,
     date_to: datetime | None = None,
+    week: datetime | None = None,
 ) -> SuccessResponse[list]:
-    return SuccessResponse(data=await cal.list_events(user.id, date_from, date_to))
+    return SuccessResponse(data=await cal.list_events(user.id, date_from, date_to, week=week))
 
 
 @router.post(
     "",
-    tags=["App - Calendar"],
+    tags=["Coach - Calendar"],
     summary="Назначить тренировку",
     description="Создаёт событие. `client_id` можно не указывать — тогда это личная тренировка тренера.",
 )
@@ -31,14 +32,14 @@ async def create(payload: CalendarIn, user: Annotated[UserPublic, Depends(requir
     return SuccessResponse(data=await cal.create_event(user.id, payload))
 
 
-@router.get("/{event_id}", tags=["App - Calendar"], summary="Карточка события")
+@router.get("/{event_id}", tags=["Coach - Calendar"], summary="Карточка события")
 async def detail(event_id: int, user: Annotated[UserPublic, Depends(require_trainer)]) -> SuccessResponse[dict]:
     return SuccessResponse(data=await cal.get_event(user.id, event_id))
 
 
 @router.patch(
     "/{event_id}",
-    tags=["App - Calendar"],
+    tags=["Coach - Calendar"],
     summary="Изменить событие",
     description="Полная модель события: даты, формат, типы, мышцы, напоминание.",
 )
@@ -50,7 +51,7 @@ async def update(
 
 @router.post(
     "/{event_id}/cancel",
-    tags=["App - Calendar"],
+    tags=["Coach - Calendar"],
     summary="Отменить событие",
     description="Тело запроса не требуется. Статус события — cancelled.",
 )
@@ -58,9 +59,19 @@ async def cancel(event_id: int, user: Annotated[UserPublic, Depends(require_trai
     return SuccessResponse(data=await cal.cancel_event(user.id, event_id))
 
 
+@router.post(
+    "/{event_id}/no-show",
+    tags=["Coach - Calendar"],
+    summary="Отметить неявку",
+    description="Тело запроса не требуется. Статус события — no_show.",
+)
+async def no_show(event_id: int, user: Annotated[UserPublic, Depends(require_trainer)]) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await cal.mark_no_show(user.id, event_id))
+
+
 @router.delete(
     "/{event_id}",
-    tags=["App - Calendar"],
+    tags=["Coach - Calendar"],
     summary="Удалить событие",
     description="Тело запроса не требуется.",
 )
@@ -71,7 +82,7 @@ async def delete(event_id: int, user: Annotated[UserPublic, Depends(require_trai
 
 @router.post(
     "/{event_id}/start-session",
-    tags=["App - Calendar"],
+    tags=["Coach - Calendar"],
     summary="Начать живую сессию",
     description="Тело запроса не требуется. Создаёт сессию из события календаря.",
 )

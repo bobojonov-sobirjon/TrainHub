@@ -1,4 +1,3 @@
-import json
 from datetime import date
 
 import asyncpg
@@ -10,6 +9,7 @@ from app.db.connection import execute, fetch, fetchrow
 from app.db.sql_loader import sql
 from app.db.transactions import transaction
 from app.schemas.stage import ClientManualIn, MeasurementIn
+from app.services.notify import create_notification
 
 
 async def _has_trainer_pro(user_id: int) -> bool:
@@ -80,6 +80,7 @@ async def list_clients(
         f"""
         SELECT
             tc.id, tc.client_id, tc.status, tc.training_format, tc.created_at,
+            COALESCE(cardinality(tc.goals), 0) AS goals_count,
             u.public_id, u.first_name, u.last_name, u.avatar_url, u.gender
         FROM trainer_clients tc
         JOIN users u ON u.id = tc.client_id
@@ -242,9 +243,9 @@ async def get_client(trainer_id: int, link_id: int) -> dict:
     row = await fetchrow(
         """
         SELECT
-            tc.id, tc.client_id, tc.status, tc.training_format, tc.goals, tc.created_at,
+            tc.id, tc.client_id, tc.status, tc.training_format, tc.goals, tc.target_weight_kg, tc.created_at,
             u.public_id, u.first_name, u.last_name, u.email, u.phone, u.avatar_url,
-            u.gender, u.birth_date, u.height_cm, u.is_shadow
+            u.gender, u.birth_date, u.height_cm, u.is_shadow, u.weight_goal_kg
         FROM trainer_clients tc
         JOIN users u ON u.id = tc.client_id
         WHERE tc.id = $1 AND tc.trainer_id = $2
@@ -275,14 +276,28 @@ async def get_client(trainer_id: int, link_id: int) -> dict:
         """,
         row["client_id"],
     )
+    sub = await fetchrow(
+        """
+        SELECT s.ends_at, s.status, p.code
+        FROM subscriptions s
+        JOIN subscription_plans p ON p.id = s.plan_id
+        WHERE s.user_id = $1 AND s.audience = 'pro_client'
+        ORDER BY s.created_at DESC LIMIT 1
+        """,
+        row["client_id"],
+    )
     data = dict(row)
+    data["subscription_ends_at"] = sub["ends_at"] if sub else None
+    data["subscription_status"] = sub["status"] if sub else None
     data["notes"] = [dict(n) for n in notes]
     data["contraindications"] = [dict(x) for x in limits]
     data["last_measurement"] = dict(last_m) if last_m else None
     return data
 
 
-async def patch_client(trainer_id: int, link_id: int, status: str | None, goals, format_) -> dict:
+async def patch_client(
+    trainer_id: int, link_id: int, status: str | None, goals, format_, target_weight_kg=None
+) -> dict:
     await get_client(trainer_id, link_id)
     if status and status not in CLIENT_STATUSES:
         raise AppError("VALIDATION_ERROR", "Некорректный статус", http_status=422)
@@ -291,7 +306,8 @@ async def patch_client(trainer_id: int, link_id: int, status: str | None, goals,
         UPDATE trainer_clients
         SET status = COALESCE($3, status),
             goals = COALESCE($4, goals),
-            training_format = COALESCE($5, training_format)
+            training_format = COALESCE($5, training_format),
+            target_weight_kg = COALESCE($6, target_weight_kg)
         WHERE id = $1 AND trainer_id = $2
         """,
         link_id,
@@ -299,6 +315,7 @@ async def patch_client(trainer_id: int, link_id: int, status: str | None, goals,
         status,
         goals,
         format_,
+        target_weight_kg,
     )
     return await get_client(trainer_id, link_id)
 
@@ -318,8 +335,9 @@ async def add_measurement(trainer_id: int, link_id: int, payload: MeasurementIn)
         """
         INSERT INTO body_measurements (
             client_id, recorded_by, weight_kg, body_fat_pct, muscle_mass_kg, water_pct,
-            chest_cm, back_cm, waist_cm, hips_cm, thigh_cm, calf_cm, neck_cm, shoulders_cm, arm_cm, forearm_cm
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+            chest_cm, back_cm, waist_cm, hips_cm, thigh_cm, calf_cm, neck_cm, shoulders_cm,
+            arm_cm, arm_left_cm, arm_right_cm, forearm_cm
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
         """,
         card["client_id"],
         trainer_id,
@@ -336,6 +354,8 @@ async def add_measurement(trainer_id: int, link_id: int, payload: MeasurementIn)
         payload.neck_cm,
         payload.shoulders_cm,
         payload.arm_cm,
+        payload.arm_left_cm,
+        payload.arm_right_cm,
         payload.forearm_cm,
     )
     return await get_client(trainer_id, link_id)
@@ -638,6 +658,15 @@ async def accept_request(trainer_id: int, request_id: int) -> dict:
     data = await _get_request(trainer_id, request_id)
     data["trainer_client_id"] = link_id
     data["client"] = await get_client(trainer_id, link_id)
+    trainer = await fetchrow("SELECT first_name, last_name FROM users WHERE id = $1", trainer_id)
+    trainer_name = f"{trainer['first_name']} {trainer['last_name']}".strip() if trainer else "Тренер"
+    await create_notification(
+        req["client_id"],
+        ntype="request_accepted",
+        title="Заявка принята",
+        body=f"{trainer_name} принял(а) вашу заявку",
+        payload={"request_id": request_id, "trainer_id": trainer_id},
+    )
     return data
 
 
@@ -648,6 +677,15 @@ async def reject_request(trainer_id: int, request_id: int) -> dict:
     await execute(
         "UPDATE client_requests SET status = 'rejected' WHERE id = $1",
         request_id,
+    )
+    trainer = await fetchrow("SELECT first_name, last_name FROM users WHERE id = $1", trainer_id)
+    trainer_name = f"{trainer['first_name']} {trainer['last_name']}".strip() if trainer else "Тренер"
+    await create_notification(
+        req["client_id"],
+        ntype="request_rejected",
+        title="Заявка отклонена",
+        body=f"{trainer_name} отклонил(а) вашу заявку",
+        payload={"request_id": request_id, "trainer_id": trainer_id},
     )
     return await _get_request(trainer_id, request_id)
 
@@ -702,26 +740,17 @@ async def create_request(client_id: int, trainer_id: int) -> dict:
 
 
 async def _notify_new_request(trainer_id: int, client_id: int, request_id: int) -> None:
-    prefs = await fetchrow(
-        "SELECT new_client_request FROM notification_preferences WHERE user_id = $1",
-        trainer_id,
-    )
-    if prefs is not None and not prefs["new_client_request"]:
-        return
     client = await fetchrow(
         "SELECT first_name, last_name FROM users WHERE id = $1",
         client_id,
     )
     name = f"{client['first_name']} {client['last_name']}".strip() if client else "Клиент"
-    await execute(
-        """
-        INSERT INTO notifications (user_id, type, title, body, payload_json)
-        VALUES ($1, 'new_client_request', $2, $3, $4::jsonb)
-        """,
+    await create_notification(
         trainer_id,
-        "Новая заявка клиента",
-        f"{name} отправил(а) заявку",
-        json.dumps({"request_id": request_id, "client_id": client_id}),
+        ntype="new_client_request",
+        title="Новая заявка клиента",
+        body=f"{name} отправил(а) заявку",
+        payload={"request_id": request_id, "client_id": client_id},
     )
 
 

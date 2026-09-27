@@ -14,8 +14,12 @@ ALLOWED_EXTENSIONS = {
     ".gif",
     ".mp4",
     ".mov",
+    ".webm",
     ".pdf",
 }
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
 
 LEGAL_EXTENSIONS = {".pdf", ".doc", ".docx"}
 

@@ -12,7 +12,7 @@ export function DashboardPage() {
   return (
     <div>
       <h1>Дашборд</h1>
-      <p className="muted">Пользователи, сессии и активные PRO-подписки.</p>
+      <p className="muted">Две роли приложения: Coach и Client. Сессии и активные PRO.</p>
       <Notice error={error ? apiError(error, "Не удалось загрузить статистику") : ""} />
       <div className="stat-grid">
         <article className="card">
@@ -20,12 +20,20 @@ export function DashboardPage() {
           <strong>{isLoading ? "…" : data?.users ?? 0}</strong>
         </article>
         <article className="card">
-          <span className="muted">Тренеры</span>
-          <strong>{isLoading ? "…" : data?.trainers ?? 0}</strong>
+          <span className="muted">Coach</span>
+          <strong>{isLoading ? "…" : data?.coaches ?? data?.trainers ?? 0}</strong>
         </article>
         <article className="card">
-          <span className="muted">Клиенты</span>
+          <span className="muted">Client</span>
           <strong>{isLoading ? "…" : data?.clients ?? 0}</strong>
+        </article>
+        <article className="card">
+          <span className="muted">Coach PRO</span>
+          <strong>{isLoading ? "…" : data?.coach_pro ?? 0}</strong>
+        </article>
+        <article className="card">
+          <span className="muted">Client PRO</span>
+          <strong>{isLoading ? "…" : data?.client_pro ?? 0}</strong>
         </article>
         <article className="card">
           <span className="muted">Активные тренировки</span>

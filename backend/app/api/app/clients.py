@@ -12,7 +12,7 @@ from app.services import clients as svc
 router = APIRouter(prefix="/trainer/clients")
 
 
-@router.get("", tags=["App - Clients"], summary="Клиенты тренера")
+@router.get("", tags=["Coach - Clients"], summary="Клиенты тренера")
 async def list_clients(
     user: Annotated[UserPublic, Depends(require_trainer)],
     q: str | None = None,
@@ -32,7 +32,7 @@ async def list_clients(
 
 @router.post(
     "/search",
-    tags=["App - Clients"],
+    tags=["Coach - Clients"],
     summary="Найти пользователя для добавления",
     description="Поиск по имени, email или телефону среди зарегистрированных клиентов.",
 )
@@ -42,7 +42,7 @@ async def search(payload: ClientSearchIn, user: Annotated[UserPublic, Depends(re
 
 @router.post(
     "",
-    tags=["App - Clients"],
+    tags=["Coach - Clients"],
     summary="Добавить существующего клиента",
     description="Привязывает уже зарегистрированного пользователя к тренеру по `user_id`.",
 )
@@ -52,7 +52,7 @@ async def add(payload: ClientAddIn, user: Annotated[UserPublic, Depends(require_
 
 @router.post(
     "/manual",
-    tags=["App - Clients"],
+    tags=["Coach - Clients"],
     summary="Создать теневого клиента",
     description="Создаёт клиента без входа в приложение. Можно сразу передать замеры, цели и противопоказания.",
 )
@@ -60,14 +60,14 @@ async def manual(payload: ClientManualIn, user: Annotated[UserPublic, Depends(re
     return SuccessResponse(data=await svc.add_manual(user.id, payload))
 
 
-@router.get("/{link_id}", tags=["App - Clients"], summary="Карточка клиента")
+@router.get("/{link_id}", tags=["Coach - Clients"], summary="Карточка клиента")
 async def detail(link_id: int, user: Annotated[UserPublic, Depends(require_trainer)]) -> SuccessResponse[dict]:
     return SuccessResponse(data=await svc.get_client(user.id, link_id))
 
 
 @router.get(
     "/{link_id}/measurements",
-    tags=["App - Clients"],
+    tags=["Coach - Clients"],
     summary="История замеров клиента",
 )
 async def list_measurements(
@@ -78,7 +78,7 @@ async def list_measurements(
 
 @router.get(
     "/{link_id}/measurements/chart",
-    tags=["App - Clients"],
+    tags=["Coach - Clients"],
     summary="График замеров клиента",
     description=(
         "Метрика: `weight_kg`, `body_fat_pct`, `muscle_mass_kg`, `water_pct`, "
@@ -98,7 +98,7 @@ async def measurements_chart(
 
 @router.get(
     "/{link_id}/notes",
-    tags=["App - Clients"],
+    tags=["Coach - Clients"],
     summary="Заметки тренера по клиенту",
 )
 async def list_notes(link_id: int, user: Annotated[UserPublic, Depends(require_trainer)]) -> SuccessResponse[list]:
@@ -107,7 +107,7 @@ async def list_notes(link_id: int, user: Annotated[UserPublic, Depends(require_t
 
 @router.get(
     "/{link_id}/stats",
-    tags=["App - Clients"],
+    tags=["Coach - Clients"],
     summary="Статистика клиента",
     description="Сессии, календарь, замеры, дни в работе и последние показатели.",
 )
@@ -117,7 +117,7 @@ async def client_stats(link_id: int, user: Annotated[UserPublic, Depends(require
 
 @router.get(
     "/{link_id}/sessions",
-    tags=["App - Clients"],
+    tags=["Coach - Clients"],
     summary="Тренировки клиента",
 )
 async def client_sessions(
@@ -134,17 +134,21 @@ async def client_sessions(
 
 @router.patch(
     "/{link_id}",
-    tags=["App - Clients"],
+    tags=["Coach - Clients"],
     summary="Обновить связь с клиентом",
     description="Меняет статус (`new|permanent|paused|archived`), цели и формат тренировок.",
 )
 async def patch(link_id: int, payload: ClientPatchIn, user: Annotated[UserPublic, Depends(require_trainer)]) -> SuccessResponse[dict]:
-    return SuccessResponse(data=await svc.patch_client(user.id, link_id, payload.status, payload.goals, payload.training_format))
+    return SuccessResponse(
+        data=await svc.patch_client(
+            user.id, link_id, payload.status, payload.goals, payload.training_format, payload.target_weight_kg
+        )
+    )
 
 
 @router.delete(
     "/{link_id}",
-    tags=["App - Clients"],
+    tags=["Coach - Clients"],
     summary="Архивировать клиента",
     description="Тело запроса не требуется. Связь переводится в `archived`.",
 )
@@ -155,7 +159,7 @@ async def archive(link_id: int, user: Annotated[UserPublic, Depends(require_trai
 
 @router.post(
     "/{link_id}/measurements",
-    tags=["App - Clients"],
+    tags=["Coach - Clients"],
     summary="Добавить замеры клиента",
     description="Все поля необязательны — передайте только измеренные значения.",
 )
@@ -165,7 +169,7 @@ async def measurement(link_id: int, payload: MeasurementIn, user: Annotated[User
 
 @router.post(
     "/{link_id}/notes",
-    tags=["App - Clients"],
+    tags=["Coach - Clients"],
     summary="Добавить заметку тренера",
     description="Текстовая заметка в карточке клиента.",
 )
@@ -175,7 +179,7 @@ async def note(link_id: int, payload: ClientNoteIn, user: Annotated[UserPublic, 
 
 @router.delete(
     "/{link_id}/notes/{note_id}",
-    tags=["App - Clients"],
+    tags=["Coach - Clients"],
     summary="Удалить заметку тренера",
     description="Тело запроса не требуется.",
 )

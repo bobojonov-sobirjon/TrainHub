@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("APP_DEBUG", "true")
 os.environ.setdefault("JWT_SECRET", "test-secret-not-for-production")
+os.environ.setdefault("TELEGRAM_BOT_USERNAME", "trainhub_bot")
 
 from app.db.migrate import apply_migrations
 from app.db.pool import close_pool, create_pool

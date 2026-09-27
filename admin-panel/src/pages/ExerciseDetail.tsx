@@ -6,6 +6,7 @@ import { ChipGroup } from "../components/ChipGroup";
 import { DetailLayout } from "../components/DetailLayout";
 import { Notice } from "../components/Notice";
 import { Select } from "../components/Select";
+import { FileField, ImageField } from "../components/MediaFields";
 import { Badge, Section } from "../components/Ui";
 import { apiError } from "../lib/apiError";
 import { initials } from "../lib/format";
@@ -26,8 +27,11 @@ export function ExerciseDetailPage() {
   const [equipment, setEquipment] = useState("");
   const [kind, setKind] = useState("strength");
   const [secondary, setSecondary] = useState<string[]>([]);
-  const [photoUrl, setPhotoUrl] = useState("");
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [photoFiles, setPhotoFiles] = useState<File[]>([]);
   const [videoUrl, setVideoUrl] = useState("");
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [clearVideo, setClearVideo] = useState(false);
   const [error, setError] = useState("");
   const { data, isLoading, error: loadError } = useQuery({
     queryKey: ["admin-exercise", exerciseId],
@@ -42,8 +46,16 @@ export function ExerciseDetailPage() {
     setEquipment(String(data.equipment ?? ""));
     setKind(String(data.exercise_type ?? "strength"));
     setSecondary(Array.isArray(data.secondary_muscles) ? data.secondary_muscles.map(String) : []);
-    setPhotoUrl(String(data.photo_url ?? ""));
+    const urls = Array.isArray(data.photo_urls)
+      ? data.photo_urls.map(String)
+      : data.photo_url
+        ? [String(data.photo_url)]
+        : [];
+    setPhotos(urls);
+    setPhotoFiles([]);
     setVideoUrl(String(data.video_url ?? ""));
+    setVideoFile(null);
+    setClearVideo(false);
   }, [data]);
 
   async function onSave(event: FormEvent) {
@@ -51,15 +63,17 @@ export function ExerciseDetailPage() {
     if (!data) return;
     setError("");
     try {
-      await adminApi.updateExercise(exerciseId, {
-        name,
-        primary_muscle: muscle,
-        equipment: equipment || null,
-        secondary_muscles: secondary,
-        exercise_type: kind,
-        photo_url: photoUrl.trim() || null,
-        video_url: videoUrl.trim() || null,
-      });
+      const payload = new FormData();
+      payload.append("name", name);
+      payload.append("primary_muscle", muscle);
+      payload.append("equipment", equipment);
+      payload.append("exercise_type", kind);
+      payload.append("secondary_muscles", JSON.stringify(secondary));
+      payload.append("keep_photos", JSON.stringify(photos));
+      payload.append("clear_video", clearVideo ? "true" : "false");
+      photoFiles.forEach((file) => payload.append("photos", file));
+      if (videoFile) payload.append("video", videoFile);
+      await adminApi.updateExercise(exerciseId, payload);
       await queryClient.invalidateQueries({ queryKey: ["admin-exercises"] });
       await queryClient.invalidateQueries({ queryKey: ["admin-exercise", exerciseId] });
       navigate("/exercises", { state: { success: "Упражнение сохранено" } });
@@ -118,15 +132,26 @@ export function ExerciseDetailPage() {
               Дополнительные мышцы
               <ChipGroup options={muscles} values={secondary} onChange={setSecondary} />
             </label>
-            {photoUrl ? <img className="preview-img" src={photoUrl} alt="" /> : null}
-            <label>
-              Фото (URL)
-              <input value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} placeholder="https://" />
-            </label>
-            <label>
-              Видео (URL)
-              <input value={videoUrl} onChange={(e) => setVideoUrl(e.target.value)} placeholder="https://" />
-            </label>
+            <ImageField
+              id="exercise-edit-photos"
+              existing={photos}
+              files={photoFiles}
+              onFiles={setPhotoFiles}
+              onRemoveExisting={(url) => setPhotos((current) => current.filter((item) => item !== url))}
+            />
+            <FileField
+              id="exercise-edit-video"
+              existingUrl={clearVideo ? null : videoUrl || null}
+              file={videoFile}
+              onFile={(next) => {
+                setVideoFile(next);
+                if (next) setClearVideo(false);
+              }}
+              onClear={() => {
+                setVideoFile(null);
+                setClearVideo(true);
+              }}
+            />
             <div className="modal-actions">
               <button type="submit">Сохранить</button>
             </div>

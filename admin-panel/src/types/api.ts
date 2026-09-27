@@ -41,6 +41,9 @@ export type DashboardStats = {
   users: number;
   trainers: number;
   clients: number;
+  coaches?: number;
+  coach_pro?: number;
+  client_pro?: number;
   active_sessions: number;
   active_subscriptions: number;
 };

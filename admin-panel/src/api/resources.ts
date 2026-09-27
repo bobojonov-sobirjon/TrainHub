@@ -18,6 +18,8 @@ export const adminApi = {
   dashboard: () => getData<DashboardStats>("/dashboard"),
   dictionaries: () => getData<DictionariesData>("/dictionaries"),
   users: (query: Query) => getData<Page<Record<string, unknown>>>("/users", query),
+  coaches: (query: Query) => getData<Page<Record<string, unknown>>>("/coaches", query),
+  appClients: (query: Query) => getData<Page<Record<string, unknown>>>("/app-clients", query),
   user: (id: number) => getData<Record<string, unknown>>(`/users/${id}`),
   blockUser: (id: number, is_blocked: boolean, reason?: string) =>
     api.post(`/users/${id}/block`, { is_blocked, reason }),
@@ -31,6 +33,12 @@ export const adminApi = {
     api.post("/programs", payload),
   updateProgram: (id: number, payload: Record<string, unknown>) =>
     api.patch(`/programs/${id}`, payload),
+  uploadProgramCover: (id: number, file?: File, clear = false) => {
+    const form = new FormData();
+    form.append("clear", clear ? "true" : "false");
+    if (file) form.append("file", file);
+    return api.post(`/programs/${id}/cover`, form);
+  },
   archiveProgram: (id: number) => api.delete(`/programs/${id}`),
   createProgramDay: (programId: number, payload: Record<string, unknown>) =>
     api.post(`/programs/${programId}/days`, payload),
@@ -46,9 +54,8 @@ export const adminApi = {
     api.delete(`/programs/${programId}/days/${dayId}/exercises/${itemId}`),
   exercises: (query: Query) => getData<Record<string, unknown>[]>("/exercises", query),
   exercise: (id: number) => getData<Record<string, unknown>>(`/exercises/${id}`),
-  createExercise: (payload: Record<string, unknown>) => api.post("/exercises", payload),
-  updateExercise: (id: number, payload: Record<string, unknown>) =>
-    api.patch(`/exercises/${id}`, payload),
+  createExercise: (form: FormData) => api.post("/exercises", form),
+  updateExercise: (id: number, form: FormData) => api.patch(`/exercises/${id}`, form),
   deleteExercise: (id: number) => api.delete(`/exercises/${id}`),
   payments: (query: Query) => getData<Page<Record<string, unknown>>>("/payments", query),
   payment: (id: number) => getData<Record<string, unknown>>(`/payments/${id}`),

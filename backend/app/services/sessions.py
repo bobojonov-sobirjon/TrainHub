@@ -68,6 +68,13 @@ async def get_session(session_id: int, actor_id: int, is_trainer: bool) -> dict:
         session_id,
     )
     data = dict(row)
+    if data.get("trainer_id"):
+        trainer = await fetchrow(
+            "SELECT first_name, last_name FROM users WHERE id = $1",
+            data["trainer_id"],
+        )
+        if trainer:
+            data["trainer_name"] = f"{trainer['first_name']} {trainer['last_name']}".strip()
     items = []
     for ex in exercises:
         sets = await fetch(
@@ -181,6 +188,13 @@ async def client_sessions(
     sort: str,
     page_size: int,
     offset: int,
+    q: str | None = None,
+    date_from=None,
+    date_to=None,
+    duration_min: int | None = None,
+    duration_max: int | None = None,
+    with_records: bool | None = None,
+    muscle: str | None = None,
 ) -> tuple[list[dict], int]:
     order = SESSION_SORT.get(sort, SESSION_SORT["newest"])
     args: list = [client_id]
@@ -188,10 +202,65 @@ async def client_sessions(
     if kind:
         args.append(kind)
         where.append(f"${len(args)} = ANY(s.kinds)")
+    if muscle:
+        args.append(muscle)
+        where.append(
+            f"""EXISTS (
+                SELECT 1 FROM session_exercises se
+                JOIN exercises e ON e.id = se.exercise_id
+                WHERE se.session_id = s.id
+                  AND (e.primary_muscle = ${len(args)} OR ${len(args)} = ANY(e.secondary_muscles))
+            )"""
+        )
     if with_trainer is True:
         where.append("s.trainer_id IS NOT NULL")
     if with_trainer is False:
         where.append("s.trainer_id IS NULL")
+    if date_from:
+        args.append(date_from)
+        where.append(f"COALESCE(s.finished_at, s.started_at, s.created_at) >= ${len(args)}")
+    if date_to:
+        args.append(date_to)
+        where.append(f"COALESCE(s.finished_at, s.started_at, s.created_at) < ${len(args)}")
+    if duration_min is not None:
+        args.append(duration_min * 60)
+        where.append(f"s.duration_sec >= ${len(args)}")
+    if duration_max is not None:
+        args.append(duration_max * 60)
+        where.append(f"s.duration_sec <= ${len(args)}")
+    if q:
+        args.append(f"%{q.strip()}%")
+        where.append(
+            f"""(
+                EXISTS (
+                    SELECT 1 FROM session_exercises se
+                    JOIN exercises e ON e.id = se.exercise_id
+                    WHERE se.session_id = s.id AND e.name ILIKE ${len(args)}
+                )
+                OR EXISTS (SELECT 1 FROM unnest(s.kinds) k WHERE k ILIKE ${len(args)})
+            )"""
+        )
+    if with_records:
+        where.append(
+            """EXISTS (
+                SELECT 1 FROM session_sets ss
+                JOIN session_exercises se ON se.id = ss.session_exercise_id
+                WHERE se.session_id = s.id AND ss.weight_kg IS NOT NULL
+                  AND ss.weight_kg >= COALESCE((
+                      SELECT MAX(ss2.weight_kg)
+                      FROM session_sets ss2
+                      JOIN session_exercises se2 ON se2.id = ss2.session_exercise_id
+                      JOIN workout_sessions ws2 ON ws2.id = se2.session_id
+                      WHERE se2.exercise_id = se.exercise_id
+                        AND ws2.status = 'completed'
+                        AND (ws2.lead_client_id = $1 OR EXISTS (
+                            SELECT 1 FROM workout_session_clients c2
+                            WHERE c2.session_id = ws2.id AND c2.client_id = $1
+                        ))
+                  ), 0)
+            )"""
+        )
+    _ = format_
     where_sql = " AND ".join(where)
     total = await fetchrow(
         f"SELECT COUNT(*) AS total FROM workout_sessions s WHERE {where_sql}",
@@ -200,12 +269,28 @@ async def client_sessions(
     args.extend([page_size, offset])
     rows = await fetch(
         f"""
-        SELECT s.id, s.source, s.kinds, s.status, s.started_at, s.finished_at, s.duration_sec, s.calories
+        SELECT
+            s.id, s.source, s.kinds, s.status, s.started_at, s.finished_at, s.duration_sec, s.calories,
+            s.trainer_id,
+            t.first_name AS trainer_first, t.last_name AS trainer_last,
+            (
+                SELECT COUNT(*) FROM session_sets ss
+                JOIN session_exercises se ON se.id = ss.session_exercise_id
+                WHERE se.session_id = s.id
+            ) AS sets_count
         FROM workout_sessions s
+        LEFT JOIN users t ON t.id = s.trainer_id
         WHERE {where_sql}
         ORDER BY {order}
         LIMIT ${len(args) - 1} OFFSET ${len(args)}
         """,
         *args,
     )
-    return [dict(r) for r in rows], int(total["total"])
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["trainer_name"] = " ".join(
+            part for part in [item.pop("trainer_first", None), item.pop("trainer_last", None)] if part
+        ) or None
+        items.append(item)
+    return items, int(total["total"])

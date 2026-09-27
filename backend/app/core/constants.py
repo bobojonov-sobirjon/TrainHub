@@ -9,6 +9,8 @@ AUD_APP = "app"
 AUD_ADMIN = "admin"
 
 ALLOWED_GENDERS = {"male", "female", "other"}
+DEVICE_PLATFORMS = {"ios", "android", "web"}
+SOCIAL_PROVIDERS = {"google", "apple", "telegram"}
 
 FREE_CLIENT_LIMIT = 5
 
@@ -18,6 +20,14 @@ CLIENT_SORT = {
     "newest": "tc.created_at DESC",
     "oldest": "tc.created_at ASC",
     "alpha": "u.last_name ASC, u.first_name ASC",
+    "male_first": "u.gender ASC NULLS LAST, u.last_name ASC",
+    "female_first": "u.gender DESC NULLS LAST, u.last_name ASC",
+}
+
+TRAINER_SORT = {
+    "rating": "COALESCE(tp.rating_avg, 0) DESC, u.id DESC",
+    "clients": "clients_count DESC, u.id DESC",
+    "newest": "u.created_at DESC",
 }
 
 REQUEST_STATUSES = {"pending", "accepted", "rejected"}
@@ -36,6 +46,8 @@ MEASUREMENT_METRICS = {
     "neck_cm",
     "shoulders_cm",
     "arm_cm",
+    "arm_left_cm",
+    "arm_right_cm",
     "forearm_cm",
 }
 

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
@@ -15,19 +15,19 @@ from app.services import sessions as sess
 router = APIRouter()
 
 
-@router.get("/client/home", tags=["App - Client"], summary="Главная клиента")
+@router.get("/client/home", tags=["Client"], summary="Главная клиента")
 async def home(user: Annotated[UserPublic, Depends(require_client)]) -> SuccessResponse[dict]:
     return SuccessResponse(data=await cab.home(user.id))
 
 
-@router.get("/client/measurements", tags=["App - Client"], summary="Мои замеры")
+@router.get("/client/measurements", tags=["Client"], summary="Мои замеры")
 async def measurements(user: Annotated[UserPublic, Depends(get_app_user)]) -> SuccessResponse[list]:
     return SuccessResponse(data=await cab.measurements(user.id))
 
 
 @router.post(
     "/client/measurements",
-    tags=["App - Client"],
+    tags=["Client"],
     summary="Добавить свои замеры",
     description="Все поля необязательны. Передайте только измеренные значения в кг/см/%.",
 )
@@ -37,19 +37,41 @@ async def add_measurement(
     return SuccessResponse(data=await cab.add_own_measurement(user.id, payload))
 
 
-@router.get("/client/progress", tags=["App - Client"], summary="Прогресс относительно прошлого замера")
+@router.patch(
+    "/client/measurements/{measurement_id}",
+    tags=["Client"],
+    summary="Изменить замер",
+    description="Обновляет только переданные поля существующей записи.",
+)
+async def patch_measurement(
+    measurement_id: int,
+    payload: MeasurementIn,
+    user: Annotated[UserPublic, Depends(get_app_user)],
+) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await cab.patch_measurement(user.id, measurement_id, payload))
+
+
+@router.get("/client/measurements/chart", tags=["Client"], summary="График замера")
+async def measurement_chart(
+    user: Annotated[UserPublic, Depends(get_app_user)],
+    metric: str = "weight_kg",
+) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await cab.measurements_chart(user.id, metric))
+
+
+@router.get("/client/progress", tags=["Client"], summary="Прогресс относительно прошлого замера")
 async def progress(user: Annotated[UserPublic, Depends(get_app_user)]) -> SuccessResponse[dict]:
     return SuccessResponse(data=await cab.progress(user.id))
 
 
-@router.get("/client/photo-progress", tags=["App - Client"], summary="Фотопрогресс")
+@router.get("/client/photo-progress", tags=["Client"], summary="Фотопрогресс")
 async def photos(user: Annotated[UserPublic, Depends(get_app_user)]) -> SuccessResponse[list]:
     return SuccessResponse(data=await cab.list_photo_sets(user.id))
 
 
 @router.post(
     "/client/photo-progress",
-    tags=["App - Client"],
+    tags=["Client"],
     summary="Загрузить фотопрогресс",
     description="multipart/form-data. `taken_on` — дата съёмки, `angles` — front,side,back через запятую, `files` — до 3 фото.",
 )
@@ -70,14 +92,19 @@ async def add_photo(
     return SuccessResponse(data=await cab.add_photo_set(user.id, taken_on, blobs))
 
 
-@router.get("/client/notes", tags=["App - Client"], summary="Личные заметки")
+@router.get("/client/trainer-notes", tags=["Client"], summary="Заметки тренера")
+async def trainer_notes(user: Annotated[UserPublic, Depends(require_client)]) -> SuccessResponse[list]:
+    return SuccessResponse(data=await cab.list_trainer_notes(user.id))
+
+
+@router.get("/client/notes", tags=["Client"], summary="Личные заметки")
 async def notes(user: Annotated[UserPublic, Depends(get_app_user)], q: str | None = None) -> SuccessResponse[list]:
     return SuccessResponse(data=await cab.list_notes(user.id, q))
 
 
 @router.post(
     "/client/notes",
-    tags=["App - Client"],
+    tags=["Client"],
     summary="Создать заметку",
     description="Заголовок обязателен, тело можно оставить пустым.",
 )
@@ -87,7 +114,7 @@ async def create_note(payload: NoteIn, user: Annotated[UserPublic, Depends(get_a
 
 @router.patch(
     "/client/notes/{note_id}",
-    tags=["App - Client"],
+    tags=["Client"],
     summary="Изменить заметку",
     description="Полная модель: title и body.",
 )
@@ -99,7 +126,7 @@ async def update_note(
 
 @router.delete(
     "/client/notes/{note_id}",
-    tags=["App - Client"],
+    tags=["Client"],
     summary="Удалить заметку",
     description="Тело запроса не требуется.",
 )
@@ -108,12 +135,19 @@ async def delete_note(note_id: int, user: Annotated[UserPublic, Depends(get_app_
     return SuccessResponse(data={"ok": True})
 
 
-@router.get("/client/sessions", tags=["App - Client"], summary="История тренировок клиента")
+@router.get("/client/sessions", tags=["Client"], summary="История тренировок клиента")
 async def client_sessions(
     user: Annotated[UserPublic, Depends(get_app_user)],
     kind: str | None = None,
+    muscle: str | None = None,
     format: str | None = None,
     with_trainer: bool | None = None,
+    with_records: bool | None = None,
+    q: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    duration_min: int | None = None,
+    duration_max: int | None = None,
     sort: str = "newest",
     page: int = 1,
     page_size: int = 20,
@@ -127,11 +161,18 @@ async def client_sessions(
         sort=sort,
         page_size=page_size,
         offset=offset,
+        q=q,
+        date_from=date_from,
+        date_to=date_to,
+        duration_min=duration_min,
+        duration_max=duration_max,
+        with_records=with_records,
+        muscle=muscle,
     )
     return SuccessResponse(data=Page(items=items, total=total, page=page, page_size=page_size))
 
 
-@router.get("/client/sessions/{session_id}", tags=["App - Client"], summary="Карточка тренировки клиента")
+@router.get("/client/sessions/{session_id}", tags=["Client"], summary="Карточка тренировки клиента")
 async def client_session_detail(
     session_id: int, user: Annotated[UserPublic, Depends(get_app_user)]
 ) -> SuccessResponse[dict]:

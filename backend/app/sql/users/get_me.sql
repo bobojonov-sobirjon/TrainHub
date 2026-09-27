@@ -9,6 +9,7 @@ SELECT
     u.gender,
     u.birth_date,
     u.height_cm,
+    u.weight_goal_kg,
     u.is_shadow,
     u.is_active,
     u.is_blocked,

@@ -1,0 +1,1144 @@
+TrainHub — Figma ekran vs API holati
+Sana: 2026-09-23
+Qoida: TAYYOR = shu ekran uchun asosiy API bor.
+       QISMAN = API bor, lekin Figma dagi qismlar yetishmaydi.
+       YO'Q = shu ekran/qism uchun API yo'q.
+
+AUDITORIYA (muhim):
+Paket 1, 2, 3, 4 — faqat COACH (trener).
+Paket 5 — faqat CLIENT (klient). Coach emas.
+
+Paket 1–3: katalog, dashboard, klientlar, kalendar, sessiya, marketplace.
+Paket 4: Coach profil, PRO, sozlamalar, yordam, legal.
+Paket 5: Client obzor, trenirovki, zamery, progress, foto, uvedomleniya, zametki.
+
+Keyin yangi ekranlar kelsa, shu faylga qo'shiladi. Auditoriyani (Coach / Client) aniq yozish kerak.
+
+
+================================================================
+1. GO TOVIE PROGRAMMY (katalog)
+   Filter: uroven / cel / oborudovanie
+   "Pokazat N rezultatov"
+   Kartochka: cover, nazvanie, uroven, nedeli
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/programs ?level=&goal=&equipment=&source=&author_id=
+- Javobda total bor — "Pokazat N rezultatov" shu total dan
+- GET /api/v1/app/dictionaries — filter variantlari
+- GET /api/v1/app/programs/{id} — dastur kartochkasi (kunlar + mashqlar)
+
+YO'Q / yetishmaydi:
+- GET /programs ?q= (matn qidiruv)
+- GET /programs ?is_pro=
+- App da PATCH /programs/{id} va DELETE /programs/{id} yo'q (faqat admin)
+- GET /programs/{id}/share yo'q
+- PRO bo'lmasa week lock (locked=true) app javobida yo'q
+
+
+================================================================
+2. SOZDAT PROGRAMMU (trener)
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- POST /api/v1/app/programs — title, level, goals, equipment, weeks, is_pro
+
+YO'Q / yetishmaydi:
+- App da dasturga kun/mashq qo'shish API yo'q
+  (POST/PATCH day, exercise faqat admin-panel da)
+- Shuning uchun Figma dagi to'liq "sozdat programmu" oqimi app orqali tugamaydi
+
+
+================================================================
+3. TRENIROVKI IZ PROFILYA
+   Tab: Programmy / Trenery
+   PRO banner
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/programs ?source=trainer — trener dasturlari
+- GET /api/v1/app/trainers — trenerlar katalogi
+- GET /api/v1/app/trainers/{id} — profil + programs[]
+- GET /api/v1/app/plans ?audience=pro_client|pro_trainer
+- GET /api/v1/app/me/subscription
+- POST /api/v1/app/me/subscription/checkout (mock)
+- POST /programs/{id}/save va DELETE /programs/{id}/save
+- POST /programs/{id}/duplicate
+
+YO'Q / yetishmaydi:
+- GET /trainers ?q= (ism qidiruv)
+- GET /trainers ?sort=rating|clients|newest
+- GET /trainers/{id}/reviews yo'q
+- GET /me/payment-methods va karta CRUD yo'q
+- PATCH /me/subscription (plan/auto_renew) yo'q
+
+
+================================================================
+4. PRO PODPISKA (90.99 / mes, 15000 / god)
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/plans
+- POST /api/v1/app/me/subscription/checkout
+- POST /api/v1/app/me/subscription/cancel
+- POST /api/v1/app/me/subscription/resume
+
+YO'Q:
+- To'lov kartasi saqlash (payment-methods)
+- Chek/receipt API
+
+
+================================================================
+5. PUBLIK PROFIL TRENERA + DASTUR DETAIL (nedeli / dni)
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/trainers/{id}
+  (ism, avatar, reyting, programmalar, bio, narx)
+- GET /api/v1/app/programs/{id}
+  (kunlar, davomiylik, mashqlar)
+
+YO'Q / yetishmaydi:
+- Reviews ro'yxati
+- Week preview lock (PRO bo'lmasa yopiq haftalar)
+- Bookmark (faqat program save bor, trener bookmark alohida yo'q)
+
+
+================================================================
+6. TRENER DASHBOARD (to'la va bo'sh holat)
+   Klienty / Trenirovki segodnya / Otchet / Vnimanie
+   Blizhayshie trenirovki, trebuyut vnimaniya
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/trainer/dashboard
+  qaytaradi: clients_count, today_done, today_planned,
+             month_sessions, attention_count
+- GET /api/v1/app/me — ism, public_id, avatar
+- GET /api/v1/app/notifications — qo'ng'iroqcha
+- GET /api/v1/app/trainer/calendar ?date_from=&date_to=
+  (bugungi / yaqin mashg'ulotlar)
+- GET /api/v1/app/trainer/attention
+- GET /api/v1/app/trainer/reports
+
+YO'Q / yetishmaydi:
+- Dashboard javobi Figma strukturasiga to'liq mos emas
+  (trainer header, unread_notifications, hint matnlari
+   "poka net klientov", "+2 za nedelyu" alohida kelmaydi)
+- Bo'sh holat matnlari frontendda yoziladi, API alohida empty-state bermaydi
+- "Blizhayshie trenirovki" alohida endpoint yo'q —
+  calendar dan olish kerak
+
+
+================================================================
+7. TRENIROVKI SEGODNYA
+   Vremya, format (zal/online), status
+   (zaversheno / v processe / ozhidaet)
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/trainer/calendar ?date_from=&date_to=
+  (vaqt, format, client, status)
+- POST /api/v1/app/trainer/calendar/{id}/start-session
+- POST /api/v1/app/trainer/calendar/{id}/cancel
+- POST /api/v1/app/sessions/{id}/complete
+
+YO'Q / yetishmaydi:
+- "Trenirovki segodnya" uchun alohida endpoint yo'q
+- Status chip lari calendar.status dan chiqariladi,
+  lekin Figma dagi aniq 3 holat mapping frontendda
+
+
+================================================================
+8. OTCHET PO TRENIROVKAM
+   Grafik po dnyam, donut po tipam,
+   baza klientov, novye / ushedshie
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/trainer/reports
+  hozir: sessions_count, calories_total, gender male/female
+
+YO'Q / yetishmaydi:
+- ?period=week|month|date
+- Kunlik grafik (dinamika)
+- Tip bo'yicha taqsimot (sila / rastjazhka / kardio / drugie)
+- Chasov provedeno (soat) — calories bor, soat yo'q
+- Novye klienty / ushedshie klienty
+- Figma dagi to'liq hisobot shu API da yo'q
+
+
+================================================================
+9. KLIENTY — RO'YXAT, FILTER, SORT
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/trainer/clients
+  ?q=&gender=&format=&status=&sort=newest|oldest|alpha
+- Filter: pol (male/female), format (gym/online), status (new/permanent)
+- Sort: po alfabetu, snachala novye, snachala starye
+- Qidiruv: ism, telefon, public_id
+
+YO'Q / yetishmaydi:
+- Sort "snachala muzhchiny" / "snachala zhenshchiny" yo'q
+- Ro'yxat itemida goals_count ("Celi: 4") kelmaydi
+  (goals faqat GET /trainer/clients/{id} da)
+- "Novyy" badge status=new dan chiqadi — OK
+
+
+================================================================
+10. DOBAVIT KLIENTA — POISK PO BAZE
+    Bo'sh, "ne nayden", topilgan + qo'shish
+================================================================
+Holat: TAYYOR
+
+- POST /api/v1/app/trainer/clients/search  { "query": "..." }
+  min 3 belgi; topilmasa [] — UI "Polzovatel ne nayden"
+- Qidiradi: telefon, email, public_id (ID), ism
+- already_added flag bor
+- POST /api/v1/app/trainer/clients  { "user_id": ... }
+- Limit: bepul 5 ta, keyin 403 TRAINER_PRO_REQUIRED
+
+
+================================================================
+11. DOBAVIT KLIENTA — VRUCHNUYU
+    Ism, familiya, email, telefon, data, celi,
+    format, zamery, zametki, protivopokazaniya
+================================================================
+Holat: TAYYOR
+
+- POST /api/v1/app/trainer/clients/manual
+  first_name, last_name, email, phone, birth_date, gender,
+  goals[], training_format, measurements{}, notes[], contraindications[]
+- GET /api/v1/app/dictionaries — celi va format ro'yxati
+- Multi-select celi + format (zal / online / zal+online) shu body da
+
+
+================================================================
+12. TREBUYUT VNIMANIYA — RO'YXAT
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/trainer/attention
+  (client ism, reason, created_at, phone)
+- POST /api/v1/app/trainer/attention/{id}/resolve
+- Qidiruv/filter UI klientlar bilan bir xil, lekin
+  attention listda gender/format/status filter API yo'q
+
+YO'Q / yetishmaydi:
+- "Ne byl N dney" alohida maydon — hozir faqat reason + created_at
+- Attention list uchun filter/sort query yo'q
+- Format badge (Zal 1) attention listda yo'q
+
+
+================================================================
+13. TREBUYUT VNIMANIYA — KLIENT DETAIL
+    Prop milit trenirovki, data nachala, abonement do,
+    ves tek/cel, svyazat'sya (tel / whatsapp / telegram)
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/trainer/clients/{id}
+  (telefon, goals, format, last_measurement.weight_kg, created_at)
+- GET /api/v1/app/trainer/clients/{id}/sessions
+- GET /api/v1/app/trainer/clients/{id}/stats
+
+YO'Q / yetishmaydi:
+- Prop milit trenirovki ro'yxati (kind + sana) alohida yo'q
+- Abonement do (klient tarif tugash sanasi) yo'q
+- Celovoy ves (target weight) yo'q
+- WhatsApp / Telegram link maydonlari yo'q (faqat phone)
+
+
+================================================================
+QISQA XULOSA (shu paket)
+================================================================
+To'liq tayyor:
+- Klient qidirish (baza)
+- Klientni qo'lda qo'shish (forma + celi + format + zamery + zametki)
+
+Asosan bor, lekin Figma ga yetmaydi:
+- Program katalog (filter asosiy, q/is_pro/share/week-lock yo'q)
+- Trener dashboard (sonlar bor, hint/header/unread yo'q)
+- Bugungi trenirovki (calendar orqali)
+- Klientlar list (filter/sort bor, goals_count va gender-sort yo'q)
+- Attention list/detail (list bor, detal va "N dney" yo'q)
+- Hisobot (soddalashtirilgan)
+- Marketplace + PRO (asosiy bor, reviews/karta/sort yo'q)
+- Dastur yaratish (faqat meta, kun/mashq app da yo'q)
+
+Keyingi paket: yangi Figma ekranlar shu fayl oxiriga qo'shiladi.
+
+
+================================================================
+PAKET 2 — 2026-09-23
+================================================================
+
+
+================================================================
+14. TREBUYUT VNIMANIYA — KLIENT DETAIL (qayta, to'liq ekran)
+================================================================
+Holat: QISMAN  (13-banddagi gap o'zgarishsiz)
+
+YO'Q:
+- Prop milit trenirovki (8 ta kind ikonkasi) alohida API
+- Abonement do
+- Ves celovoy (80 kg)
+- WhatsApp / Telegram kontakt
+
+
+================================================================
+15. KLIENT KARTASI "TRENIROVKA"
+    Start, statistika (rost/ves/jir), zamery grafik,
+    posechaemost 30 dney, proshlaya trenirovka, istoriya
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/trainer/clients/{id}
+  (height_cm, last_measurement: weight_kg, body_fat_pct)
+- GET /api/v1/app/trainer/clients/{id}/measurements
+- GET /api/v1/app/trainer/clients/{id}/measurements/chart ?metric=
+- GET /api/v1/app/trainer/clients/{id}/stats
+- GET /api/v1/app/trainer/clients/{id}/sessions
+- POST /api/v1/app/sessions  { source, client_ids[] } — Start tugmasi
+- GET /api/v1/app/sessions/{id}
+
+YO'Q / yetishmaydi:
+- Trainer tomonda 30 kunlik posechaemost (present/missed/rest)
+  faqat GET /client/home da bor, GET /trainer/clients/{id} da yo'q
+- Oxirgi mashg'ulot: km (masofa) yo'q; RPE yo'q
+  (bor: duration_sec, calories, sets weight/reps)
+- "Vse" istoriya filter/sort trainer client sessions da faqat ?kind=
+
+
+================================================================
+16. VYBRAT TIP TRENIROVKI
+    Novaya / Zaplanirovannye / Gotovaya / Trenirovki ot profiley (PRO)
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- Novaya: POST /api/v1/app/sessions { "source": "new" }
+- Zaplanirovannye: GET /api/v1/app/trainer/calendar
+  + POST /trainer/calendar/{id}/start-session
+- Gotovaya: GET /api/v1/app/programs + POST /sessions
+  { "source": "program", "program_day_id": ... }
+- Ot profiley: GET /programs ?source=trainer
+- PRO lock: GET /me/subscription + GET /plans
+
+YO'Q:
+- Shu 4 ta kartochka uchun alohida endpoint yo'q (frontend tanlaydi)
+- PRO dasturlarni yopish (week lock) app javobida yo'q
+
+
+================================================================
+17. JONLI SESSIYA
+    Bir nechta klient, taymer, podhod (ves/povtory),
+    proshlaya trenirovka, +podhod, zavershit uprazhnenie,
+    +uprazhnenie, Zakonchit
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- POST /api/v1/app/sessions  { client_ids[] } — start
+- GET /api/v1/app/sessions/{id}
+- POST /sessions/{id}/exercises  { exercise_id }
+- POST /sessions/{id}/exercises/{se_id}/sets  { weight_kg, reps }
+- GET /sessions/{id}/previous/{exercise_id} ?client_id= — oldingi setlar
+- POST /sessions/{id}/complete
+  javobda summary: duration_sec, exercises_done/total, calories
+
+YO'Q / yetishmaydi:
+- Sessiya davomida klient qo'shish/olib tashlash (PATCH clients yo'q)
+- Set ni tahrirlash/o'chirish (PATCH/DELETE set yo'q)
+- "Zavershit uprazhnenie" alohida API yo'q
+- PATCH /sessions/{id} yo'q
+- Taymer serverda emas (frontend hisoblaydi)
+- RPE maydoni yo'q
+
+
+================================================================
+18. DOBAVIT UPRZAHNENIE (qidiruv + filter)
+    Poslednie, oborudovanie, myshcy
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/exercises ?q=&equipment=&muscle=
+- GET /api/v1/app/dictionaries — oborudovanie va myshechnye gruppy
+
+YO'Q:
+- ?scope=recent|mine|global  — "Poslednie uprazhneniya" alohida yo'q
+  (hozir created_at DESC, oxirgi ISHLATILGAN emas)
+- GET /exercises/{id} app routerda yo'q (service bor, route yo'q)
+
+
+================================================================
+19. SOZDAT UPRZAHNENIE
+    Foto, nazvanie, oborudovanie, osnovnaya/drugie myshcy, tip
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- POST /api/v1/app/exercises
+  name, equipment, primary_muscle, secondary_muscles, exercise_type
+- PATCH /exercises/{id}  (faqat o'ziniki)
+- DELETE /exercises/{id}
+- GET /dictionaries
+
+YO'Q:
+- App da mashq uchun file upload (multipart) yo'q
+  (faqat photo_url matn; fayl yuklash admin-panel da)
+- Video upload app da yo'q
+
+
+================================================================
+20. TRENIROVKA ZAVERSHENA (modal)
+    Minuty, uprazhneniya 12/14, kcal
+================================================================
+Holat: TAYYOR
+
+- POST /api/v1/app/sessions/{id}/complete
+  summary.duration_sec, summary.exercises_done, summary.exercises_total,
+  summary.calories
+- kcal taxminiy (~657) — backend calories maydoni bor, hisoblash qoidasi
+  to'liq Figma ga mos kelishi aniq emas
+
+
+================================================================
+21. UVEDOMLENIYA
+    Segodnya / vchera / sana, bo'sh holat, belgilab o'qish
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/notifications ?tab=today|later
+  (id, type, title, body, is_read, created_at)
+- POST /notifications/{id}/read
+- POST /notifications/read-all
+- Bo'sh ro'yxat = [] — empty state frontend
+
+YO'Q / yetishmaydi:
+- Tab "vchera" / sana bo'yicha guruhlash API da yo'q
+  (faqat today | later; sana frontendda created_at dan)
+- Read-all Figma dagi "galochka" ga mos, lekin guruh filter yo'q
+
+
+================================================================
+22. KALENDAR — KUNLIK RO'YXAT
+    Slotlar, event (klient, kind, davomiylik),
+    menu: izmenit / udalit, + yangi slot
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/trainer/calendar ?date_from=&date_to=
+  (klient ismi, kinds, starts_at, ends_at, duration_min, format)
+- PATCH /trainer/calendar/{id}
+- DELETE /trainer/calendar/{id}
+- POST /trainer/calendar/{id}/cancel
+
+YO'Q:
+- GET ?date=YYYY-MM-DD qisqa filter yo'q (from/to kerak)
+- "+2" extra kinds soni — kinds[] dan frontend hisoblaydi
+
+
+================================================================
+23. NAZNACHIT / NOVAYA TRENIROVKA (forma)
+    Sana, vaqt, klient, format, tip, status,
+    povtor kazhduyu nedelyu, napominanie, zametka
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- POST /api/v1/app/trainer/calendar
+  client_id, starts_at, ends_at, format, kinds[],
+  note, reminder (none|1h|3h), repeat_weekly, status
+- PATCH /trainer/calendar/{id}
+- GET /trainer/clients — klient picker
+- GET /dictionaries — format va tip (workout_kind, muscle)
+
+YO'Q / yetishmaydi:
+- Status "propuschena" (no_show) create da yo'q
+  (schema: scheduled, cancelled, done)
+- Repeat o'zgartirish scope=this|this_and_future|all yo'q
+  (create da 12 hafta oldindan nusxa yoziladi)
+- reminder 15m / 1d schema da yozilgan, server faqat none|1h|3h qabul qiladi
+- note 200 belgi limiti API da yo'q (Figma 0/200)
+
+
+================================================================
+QISQA XULOSA — PAKET 2
+================================================================
+To'liq tayyor:
+- Trenirovka zavershena (complete + summary)
+
+Asosan bor:
+- Jonli sessiya (start, set, previous, complete)
+- Mashq qidirish (q/equipment/muscle)
+- Mashq yaratish (meta, fayl upload yo'q)
+- Kalendar CRUD + forma maydonlari
+- Bildirishnomalar list + read
+
+Yo'q / yetarli emas:
+- Trainer client posechaemost 30d
+- Target weight, abonement do, WA/TG
+- Recent exercises scope
+- App exercise photo upload
+- Session ichida klient qo'shish, set PATCH/DELETE,
+  "zavershit uprazhnenie"
+- Calendar no_show + repeat scope
+- Notifications yesterday/date grouping
+
+
+================================================================
+PAKET 3 — 2026-09-23
+================================================================
+
+
+================================================================
+24. ZAPLANIROVANNYE — HAFTALIK SETKA
+    Hafta tanlash, Pnd/Vtr..., soat slotlari,
+    kartochka: klient + daqiqa, rang, +
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/trainer/calendar ?date_from=&date_to=
+  (starts_at, ends_at, duration_min, first_name, last_name, status)
+- POST /trainer/calendar — + tugmasi
+
+YO'Q:
+- Haftalik grid uchun alohida API yo'q (from/to dan frontend chizadi)
+- Rang-kod (yashil/sariq/kulrang) serverdan kelmaydi — status dan UI
+- GET ?week=2026-10-06 qisqa parametr yo'q
+
+
+================================================================
+25. TRENIROVKA DETAIL (rejalashtirilgan)
+    Klient + "klient s 12 fevralya", telefon,
+    sana/vaqt/format/status, plan (myshcy), zametka,
+    Otmena / Nachat, menyu: Izmenit / Otmenit
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/trainer/calendar/{id}
+  (klient ism, phone, starts_at, ends_at, duration_min,
+   format, status, kinds, focus_muscles, note)
+- POST /trainer/calendar/{id}/cancel
+- POST /trainer/calendar/{id}/start-session
+- PATCH /trainer/calendar/{id}
+
+YO'Q:
+- "Klient s 12.02.2025" — event da trainer_clients.created_at yo'q
+- Klient avatar event javobida yo'q
+
+
+================================================================
+26. NOVAYA TRENIROVKA — FORMA + PICKERLAR
+    Klient picker, tip multi-select, status, format,
+    repeat weekly, reminder, note 0/200
+================================================================
+Holat: QISMAN  (23-band bilan bir xil)
+
+TAYYOR:
+- GET /trainer/clients
+- GET /dictionaries
+- POST /trainer/calendar
+  (kinds[], reminder none|1h|3h, repeat_weekly, format, note, status)
+
+YO'Q:
+- status=no_show / "propuschena"
+- note max 200 validatsiya
+- repeat scope this|this_and_future|all
+- reminder 15m / 1d (server rad etadi)
+
+
+================================================================
+27. GOTOVAYA TRENIROVKA — KATALOG + FILTR
+================================================================
+Holat: QISMAN  (1-band takror)
+
+TAYYOR:
+- GET /programs ?level=&goal=&equipment=
+- total, workouts_per_week, dictionaries
+
+YO'Q:
+- ?q= , ?is_pro= , share
+
+
+================================================================
+28. PROGRAMMA DETAIL
+    Save, tavsif, kunlar, menyu:
+    redaktirovat / podelitsya / dublirovat / udalit
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /programs/{id}
+- POST /programs/{id}/save
+- DELETE /programs/{id}/save
+- POST /programs/{id}/duplicate
+
+YO'Q:
+- App PATCH /programs/{id}
+- App DELETE /programs/{id}
+- GET /programs/{id}/share
+- Kun/mashqni app da tahrirlash
+
+
+================================================================
+29. TRENIROVKI OT PROFILYA + PRO MODAL
+    Tab programmy/trenery, kategoriya, 90.99 / 15000
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /programs ?source=trainer
+- GET /trainers ?category=
+- GET /plans , checkout, subscription
+
+YO'Q:
+- GET /trainers ?q= va ?sort=
+- GET /trainers/{id}/reviews
+- payment-methods
+- Trener bookmark
+
+
+================================================================
+30. PROFIL TRENERA + HAFTA LOCK
+    Nedelya 1 ochiq, nedeli 2-8 PRO
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /trainers/{id}
+- GET /programs/{id}
+
+YO'Q:
+- Week lock (locked=true / is_preview)
+- Reviews ro'yxati
+- Bookmark trener
+- Program card o'z reytingi
+
+
+================================================================
+QISQA XULOSA — PAKET 3
+================================================================
+Yo'q (shu paket):
+- Event da "klient s [sana]" va avatar
+- Calendar no_show, repeat scope, note 200
+- App program PATCH / DELETE / share
+- Program week PRO lock
+- Trainer reviews, bookmark, trainers q/sort
+- Payment-methods
+- Haftalik grid alohida API (from/to yetadi, lekin week= yo'q)
+
+Keyingi paket: yangi Figma ekranlar shu fayl oxiriga qo'shiladi.
+
+
+================================================================
+PAKET 4 — 2026-09-23
+COACH (trener) profil / PRO / sozlamalar / yordam / legal
+Barcha ekranlar shu paketda ham Coach.
+================================================================
+
+
+================================================================
+31. PROFIL (hub)
+    Avatar, ism, Pro badge, "Personalnyy trener"
+    Statistika: Klientov / Opyta / Reyting
+    Akkount: Lichnye dannye, Specializaciya i ceny, Podpiska PRO
+    Nastroyki: Uvedomleniya, Nastroyki prilozheniya
+    Podderzhka: Centr pomoshchi, Usloviya, Politika
+    Vyyti iz akkaunta
+================================================================
+Holat: TAYYOR (hub o'zi GET lar bilan yig'iladi)
+
+TAYYOR:
+- GET /api/v1/app/me
+  (first_name, last_name, avatar_url, phone, email, roles)
+- GET /api/v1/app/trainer/profile
+  (clients_count, experience_years, rating_avg, bio, specializations)
+- GET /api/v1/app/me/subscription ?audience=pro_trainer
+  (status, ends_at — "PRO — Aktivna")
+- POST /api/v1/app/logout  { refresh_token }
+
+IZOH:
+- "Personalnyy trener" matni client-side, roles dan
+- Pro badge = subscription status
+- Hub menyu itemlari alohida ekranlar (32–42)
+
+
+================================================================
+32. LICHNYE DANNYE
+    Foto o'zgartirish
+    Imya i familiya, telefon, email, data rozhdeniya
+    O sebe (300), stazh raboty
+    Sohranit
+================================================================
+Holat: QISMAN
+
+TAYYOR (o'qish):
+- GET /me — ism, telefon, email, birth_date, avatar_url
+- GET /trainer/profile — bio (max 300), experience_years
+- PATCH /trainer/profile — bio, experience_years saqlanadi
+
+YO'Q:
+- PATCH /me  (ProfilePatchIn schema bor, lekin app endpoint yo'q)
+  ism, familiya, birth_date, gender yangilab bo'lmaydi
+- App avatar upload (avatar_url faqat o'qiladi; Google login da kelishi mumkin)
+- Telefon / email o'zgartirish API
+
+
+================================================================
+33. SPECIALIZACIYA I CENY
+    (Figma title ba'zan "Podpiska PRO", kontent ixtisoslik)
+    Chip: specializacii, format raboty
+    Cena za zanyatie, dlitelnost
+    Pervaya vstrecha besplatno (toggle)
+    Sohranit
+================================================================
+Holat: TAYYOR
+
+TAYYOR:
+- GET /trainer/profile
+- PATCH /trainer/profile
+  { bio, experience_years, specializations[], work_formats[],
+    session_price_amount, session_duration_min, free_first_consult }
+- GET /dictionaries — fitness_goal, training_format kodlari
+
+
+================================================================
+34. PODPISKA PRO (aktiv / otmena / vozobnovit)
+    Aktivna do [sana]
+    Benefitlar ro'yxati
+    Upravlyat podpiskoy
+    Otmenit / Vozobnovit
+    Istoriya platezhey: sana, summa, status
+    Oshibka oplaty + "Povtorit oplatu"
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /me/subscription ?audience=pro_trainer
+- GET /plans ?audience=pro_trainer
+- POST /me/subscription/cancel
+- POST /me/subscription/resume
+- GET /payments  (id, amount, currency, status, paid_at)
+
+YO'Q:
+- POST /payments/{id}/retry  (muvaffaqiyatsiz to'lovni qayta urinish)
+- GET /payments/{id} yoki receipt / chek
+- Benefitlar matni — API emas, client-side
+
+
+================================================================
+35. UPRAVLENIE PODPISKOY
+    Tarif: mesyachnyy / godovoy
+    Sposob oplaty: Visa •••4417 + Izmenit
+    Avtoprodlenie toggle
+    Sohranit izmeneniya
+    Otmenit podpisku
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /plans ?audience=pro_trainer  (period month/year, price, discount_pct)
+- POST /me/subscription/checkout  { plan_id }  — tarif almashtirish (mock)
+- POST /me/subscription/cancel — avtoprodlenie off
+- POST /me/subscription/resume — avtoprodlenie on
+
+YO'Q:
+- GET/PATCH /me/payment-methods  (karta oxirgi 4 raqam, Izmenit)
+- PATCH /me/subscription  (bitta "Sohranit": tarif + karta + auto_renew)
+- Real to'lov provayderi (hozir faqat mock checkout)
+
+
+================================================================
+36. OTMENIT PODPISKU (modal)
+    Ostavit / Otmenit
+================================================================
+Holat: TAYYOR
+
+TAYYOR:
+- POST /me/subscription/cancel
+  (period oxirigacha ishlaydi, auto_renew=false)
+
+
+================================================================
+37. UVEDOMLENIYA (preferenslar)
+    Push i email: push, email-rassylka
+    Sobytija: napominaniya o trenirovkah,
+              novye zayavki, otchyoty po klientam
+================================================================
+Holat: TAYYOR
+
+TAYYOR:
+- GET /me/notification-preferences
+- PATCH /me/notification-preferences
+  { push_enabled, email_enabled, workout_reminder,
+    new_client_request, client_report }
+
+
+================================================================
+38. NASTROYKI PRILOZHENIYA
+    Smenit parol
+    Versiya prilozheniya 2.4.1
+================================================================
+Holat: TAYYOR
+
+TAYYOR:
+- POST /auth/change-password  { current_password, new_password }
+
+IZOH:
+- Versiya — client-side (API kerak emas)
+
+
+================================================================
+39. CENTR POMOSHCHI
+    Qidiruv, FAQ ro'yxati, Napisat v podderzhku
+================================================================
+Holat: TAYYOR
+
+TAYYOR:
+- GET /faq ?q= &audience=trainer
+- GET /faq/{slug}
+- POST /support/tickets  { subject, message }
+- GET /support/tickets  (mening murojaatlarim)
+
+
+================================================================
+40. USLOVIYA ISPOLZOVANIYA
+================================================================
+Holat: TAYYOR
+
+TAYYOR:
+- GET /legal/terms
+
+
+================================================================
+41. POLITIKA KONFIDENCIALNOSTI
+================================================================
+Holat: TAYYOR
+
+TAYYOR:
+- GET /legal/privacy
+
+
+================================================================
+42. VYYTI IZ AKKAUNTA (modal)
+    Otmena / Vyyti
+================================================================
+Holat: TAYYOR
+
+TAYYOR:
+- POST /logout  { refresh_token }
+
+
+================================================================
+QISQA XULOSA — PAKET 4 (COACH)
+================================================================
+Yo'q (shu paket):
+- PATCH /me (ism, familiya, tug'ilgan kun)
+- App avatar upload
+- Telefon / email o'zgartirish
+- Payment-methods (karta ko'rsatish / almashtirish)
+- PATCH /me/subscription (bitta Save: tarif+karta+auto_renew)
+- POST /payments/{id}/retry
+- To'lov cheki / receipt
+
+TAYYOR (shu paket):
+- Profil hub GET lari
+- Specializaciya i ceny PATCH
+- PRO cancel / resume / plans / payments history
+- Notification preferences
+- Change password, logout
+- FAQ + support ticket
+- Legal terms / privacy
+
+ESLATMA:
+Paket 1–4 hammasi COACH. Client — Paket 5.
+
+Keyingi paket: yangi Figma ekranlar shu fayl oxiriga qo'shiladi.
+
+
+================================================================
+PAKET 5 — 2026-09-23
+AUDITORIYA: CLIENT (klient). Coach emas.
+Obzor / Trenirovki / Zamery / Progress / Foto / Uvedomleniya / Zametki
+================================================================
+
+
+================================================================
+43. CLIENT OBZOR (home)
+    Ism, public_id, streak, bell
+    Tab: Obzor / Trenirovki / Zamery / Progress / Zametki
+    Ves + delta 30 kun, progress % (do 100 kg)
+    Dinamika vesa (30 dney)
+    Poseshchaemost za mesyac (byl / propustil / eshche ne nastupil)
+    Proshlaya trenirovka + podrobnee
+    Top podhody, zametki trenera (+)
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /api/v1/app/me  (first_name, public_id, avatar_url)
+- GET /api/v1/app/client/home
+  weight_kg, body_fat_pct, days_in_program,
+  weight_chart[{date, weight_kg}] oxirgi 30 yozuv,
+  attendance_30d[{date, status}] calendar_events 30 kun,
+  last_session{id, duration_sec, calories, finished_at}
+- GET /client/sessions/{id} — "Podrobnee"
+- GET /notifications  — bell (ro'yxat; unread count alohida yo'q)
+
+YO'Q:
+- Streak (olov + "5") — API yo'q
+- Maqsad vazn / progress % (66% do 100 kg)
+- "+2.5 kg za 30 dney" — backend hisoblamaydi (chart dan client hisoblasa bo'ladi)
+- last_session da kinds, mashqlar soni, top setlar, trener ismi
+- GET /client/trainer-notes  (obzordagi "Zametki trenera")
+  trainer_notes faqat Coach GET /trainer/clients/{id}/notes da
+- Oy bo'yicha poseshchaemost (faqat oxirgi 30 kun, month= yo'q)
+- Chart period tanlash (faqat oxirgi 30 yozuv)
+- Unread notifications count (badge)
+
+
+================================================================
+44. CLIENT TRENIROVKI (istoriya)
+    Qidiruv, filter, sort, oy (Iyun)
+    Kartochka: #nomer, muskullar, sana, davomiylik, podhody, lichnyy rekord
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /client/sessions
+  ?kind=  ?with_trainer=  ?sort=newest|oldest|duration_asc|duration_desc
+  ?page= &page_size=
+  javob: id, source, kinds[], status, started_at, finished_at, duration_sec, calories
+
+YO'Q:
+- GET /client/sessions ?q=  (Nomni qidirish)
+- ?month= / ?date_from=&date_to=  (oy filtri)
+- ?duration=30|60|60plus  (format= query bor, lekin servisda ishlatilmaydi)
+- ?with_records=true  (faqat rekordli)
+- Kartochkada lichnyy rekord matni
+- Kartochkada podhodlar soni
+- Kartochkada trener ismi
+
+IZOH:
+- kind=  s.kinds[] ni filter qiladi. kinds = workout_kind (strength...),
+  Figma filtri esa muscle_group (grud, spina, nogi, ruki, kardio).
+  Muskullar bo'yicha filter mos kelmasligi mumkin.
+
+
+================================================================
+45. CLIENT TRENIROVKI — FILTR
+    Vid: Grud / Spina / Nogi / Ruki / Kardio
+    Po dlitelnosti: 30 / 60 / 60+
+    Tolko s rekordami
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- ?kind=  (agar kinds muscle_group kodida saqlansa)
+
+YO'Q:
+- Davomiylik filtri (30/60/60+)
+- Tolko s lichnymi rekordami
+- GET /dictionaries muscle_group — chip matnlari uchun bor,
+  lekin sessions filteriga bog'lanmagan
+
+
+================================================================
+46. CLIENT TRENIROVKI — SORT
+    Snachala novye / starye
+    Ot korotkih k dlinnym / ot dlinnyh k korotkim
+================================================================
+Holat: TAYYOR
+
+TAYYOR:
+- GET /client/sessions ?sort=newest
+- ?sort=oldest
+- ?sort=duration_asc
+- ?sort=duration_desc
+
+
+================================================================
+47. CLIENT TRENIROVKA DETAL (#3)
+    Muskullar, sana
+    Dlitelnost, podhody, kalorii, trener
+    Mashqlar + setlar (ves, povtory)
+    Delta vs proshlaya (+2.5 / -5.0 kg)
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /client/sessions/{id}
+  yoki GET /sessions/{id}
+  (kinds, duration_sec, calories, trainer_id, exercises[].sets[])
+- GET /sessions/{id}/previous/{exercise_id}
+  (o'tgan mashq setlari — deltan client hisoblaydi)
+
+YO'Q:
+- Trener ismi (faqat trainer_id)
+- Jami podhodlar soni (client yig'adi)
+- Lichnyy rekord belgisi
+- Delta tayyor maydon (previous_sets dan hisoblash kerak)
+
+
+================================================================
+48. CLIENT ZAMERY
+    Pol, ves, rost, vozrast
+    Obhvat tela ro'yxati + tahrirlash
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /me — gender, birth_date (yosh client-side)
+- GET /client/measurements — oxirgi qator: weight_kg, chest/waist/...
+- POST /client/measurements  (yangi snapshot, barcha maydon ixtiyoriy)
+
+YO'Q:
+- GET /me da height_cm QAYTARILMAYDI
+  (DB da bor, UserPublic da yo'q)
+- PATCH /me  (rost, pol, tug'ilgan kun yangilab bo'lmaydi)
+- Chap / o'ng biceps alohida (faqat bitta arm_cm)
+- PATCH /client/measurements/{id}  (bitta maydonni tahrirlash)
+  Figma slider = yangi POST bilan bir maydon yuborish mumkin
+
+
+================================================================
+49. CLIENT IZMENIT ZAMER (slider modal)
+    Bitta zona, joriy sm, oxirgi razmer + sana, Sohranit
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /client/measurements — oxirgi qiymat va recorded_at
+- POST /client/measurements  { arm_cm: "37.0" }  — yangi yozuv
+
+YO'Q:
+- PATCH mavjud yozuv
+- Chap/o'ng qo'l alohida maydon
+
+
+================================================================
+50. CLIENT PARAMETRY TELA (progress ro'yxat)
+    Har zona: sparkline, joriy, delta (+3.0 / -1.5)
+================================================================
+Holat: QISMAN
+
+TAYYOR:
+- GET /client/progress
+  current + previous (oxirgi 2 zamera farqi)
+- GET /client/measurements — to'liq tarix (sparkline client yasaydi)
+
+YO'Q:
+- Client uchun GET /client/measurements/chart ?metric=
+  (bunday chart faqat Coach: /trainer/clients/{id}/measurements/chart)
+
+
+================================================================
+51. CLIENT FOTO PROGRESS
+    Guruh: N mesyac nazad (sana), 3 rasm, + qo'shish
+================================================================
+Holat: TAYYOR
+
+TAYYOR:
+- GET /client/photo-progress
+  [{id, taken_on, images[{angle, image_url}]}]
+- POST /client/photo-progress
+  multipart: taken_on, angles=front,side,back, files (max 3)
+
+IZOH:
+- "1 mesyac nazad" matni client-side, taken_on dan
+
+
+================================================================
+52. CLIENT UVEDOMLENIYA
+    Bugun / kecha / sana
+    Tip: Trenirovka, Platezh, Cel, Progress
+    Bo'sh holat
+================================================================
+Holat: TAYYOR
+
+TAYYOR:
+- GET /notifications ?tab=today  (yoki later)
+  {id, type, title, body, is_read, scheduled_at, created_at}
+- POST /notifications/{id}/read
+- POST /notifications/read-all
+
+IZOH:
+- Bugun/kecha guruhlash — client-side, created_at dan
+- Bo'sh holat — API [] qaytarsa yetadi
+- unread count alohida endpoint yo'q
+
+
+================================================================
+53. CLIENT ZAMETKI (list / empty / menu / detail / create)
+    Qidiruv, +, Izmenit / Udalit
+    Title + body, sana/vaqt
+================================================================
+Holat: TAYYOR
+
+TAYYOR:
+- GET /client/notes ?q=
+- POST /client/notes  { title, body }
+- PATCH /client/notes/{id}  { title, body }
+- DELETE /client/notes/{id}
+
+IZOH:
+- GET /client/notes/{id} yo'q — list da body to'liq keladi
+- Bu shaxsiy zametki (personal_notes).
+  Obzordagi "Zametki trenera" — boshqa jadval, Client API yo'q
+- Bo'sh holat — [] qaytadi
+
+
+================================================================
+QISQA XULOSA — PAKET 5 (CLIENT)
+================================================================
+Yo'q (shu paket):
+- Streak
+- Maqsad vazn / progress %
+- GET /client/trainer-notes (trener izohlari clientga)
+- last_session to'liq kartochka (kinds, top set, trener ismi)
+- Sessions q=, oy, davomiylik, rekord filtri
+- Sessions ro'yxatda rekord / podhod / trener ismi
+- GET /me da height_cm
+- PATCH /me (rost va h.k.)
+- Chap/o'ng biceps (arm_left / arm_right)
+- PATCH measurement
+- Client measurements/chart
+- Muscle_group filter sessions ga ulanmagan
+- Unread notifications count
+
+TAYYOR (shu paket):
+- GET /client/home (ves, chart 30d, attendance 30d, last_session qisqa)
+- GET /client/sessions + sort newest/oldest/duration
+- GET /client/sessions/{id} + previous sets
+- GET/POST measurements
+- GET /client/progress (current vs previous)
+- GET/POST photo-progress
+- Notifications list + read
+- Client notes CRUD + qidiruv
+
+ESLATMA:
+Paket 5 = CLIENT. Paket 1–4 = COACH. Aralashtirmaslik.
+
+Keyingi paket: yangi Figma ekranlar shu fayl oxiriga qo'shiladi.
+
+

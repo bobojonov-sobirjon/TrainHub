@@ -10,15 +10,21 @@ import { apiError } from "../lib/apiError";
 import { initials, labelOf, personName } from "../lib/format";
 import { ROLE_LABELS, ROLE_OPTIONS } from "../lib/options";
 
-export function UsersPage() {
+export function UsersPage({ lockedRole }: { lockedRole?: string }) {
   const queryClient = useQueryClient();
   const [q, setQ] = useState("");
   const [role, setRole] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const roleFilter = lockedRole ?? role;
   const { data, isLoading, error: loadError } = useQuery({
-    queryKey: ["admin-users", q, role],
-    queryFn: () => adminApi.users({ q, role, page: 1, page_size: 50 }),
+    queryKey: ["admin-users", q, roleFilter, lockedRole ?? "all"],
+    queryFn: () =>
+      lockedRole === "trainer"
+        ? adminApi.coaches({ q, page: 1, page_size: 50 })
+        : lockedRole === "client"
+          ? adminApi.appClients({ q, page: 1, page_size: 50 })
+          : adminApi.users({ q, role: roleFilter, page: 1, page_size: 50 }),
   });
 
   async function toggleBlock(row: Record<string, unknown>) {
@@ -37,24 +43,34 @@ export function UsersPage() {
   return (
     <div>
       <div className="page-head">
-        <h1>Пользователи</h1>
+        <h1>{lockedRole === "trainer" ? "Coach" : lockedRole === "client" ? "Client" : "Пользователи"}</h1>
       </div>
       <Notice error={error || (loadError ? apiError(loadError, "Не удалось загрузить пользователей") : "")} success={success} />
       <Toolbar>
         <input placeholder="Поиск" value={q} onChange={(e) => setQ(e.target.value)} />
-        <Select
-          value={role}
-          onChange={setRole}
-          options={ROLE_OPTIONS}
-          allowEmpty
-          emptyLabel="Все роли"
-          placeholder="Роль"
-        />
+        {lockedRole ? null : (
+          <Select
+            value={role}
+            onChange={setRole}
+            options={ROLE_OPTIONS}
+            allowEmpty
+            emptyLabel="Все роли"
+            placeholder="Роль"
+          />
+        )}
       </Toolbar>
       {isLoading ? <p className="muted">Загрузка...</p> : null}
       <DataTable
         rows={data?.items ?? []}
-        empty={q ? "Ничего не найдено" : "Пока нет пользователей"}
+        empty={
+          q
+            ? "Ничего не найдено"
+            : lockedRole === "client"
+              ? "Пока нет пользователей Client"
+              : lockedRole === "trainer"
+                ? "Пока нет пользователей Coach"
+                : "Пока нет пользователей"
+        }
         emptyHint={q ? "Попробуйте изменить запрос или роль." : undefined}
         columns={[
           { key: "id", label: "ID" },

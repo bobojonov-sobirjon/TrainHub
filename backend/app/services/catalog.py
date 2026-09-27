@@ -1,7 +1,24 @@
+from uuid import uuid4
+
 from app.core.exceptions import AppError
 from app.db.connection import execute, fetch, fetchrow
 from app.db.transactions import transaction
 from app.schemas.stage import ExerciseCreateIn, ProgramCreateIn, ProgramDayExerciseIn, ProgramDayIn
+
+EXERCISE_COLS = """
+    id, owner_id, name, photo_url, photo_urls, video_url, equipment, primary_muscle,
+    secondary_muscles, exercise_type, is_public, created_at
+"""
+
+
+def _exercise_out(row) -> dict:
+    data = dict(row)
+    urls = [item for item in (data.get("photo_urls") or []) if item]
+    if not urls and data.get("photo_url"):
+        urls = [data["photo_url"]]
+    data["photo_urls"] = urls
+    data["photo_url"] = urls[0] if urls else None
+    return data
 
 
 async def list_exercises(q: str | None, equipment: str | None, muscle: str | None, owner_id: int | None) -> list[dict]:
@@ -21,8 +38,7 @@ async def list_exercises(q: str | None, equipment: str | None, muscle: str | Non
         where.append(f"(e.primary_muscle = ${len(args)} OR ${len(args)} = ANY(e.secondary_muscles))")
     rows = await fetch(
         f"""
-        SELECT id, owner_id, name, photo_url, video_url, equipment, primary_muscle,
-               secondary_muscles, exercise_type, is_public, created_at
+        SELECT {EXERCISE_COLS}
         FROM exercises e
         WHERE {" AND ".join(where)}
         ORDER BY e.is_public DESC, e.created_at DESC
@@ -30,33 +46,34 @@ async def list_exercises(q: str | None, equipment: str | None, muscle: str | Non
         """,
         *args,
     )
-    return [dict(r) for r in rows]
+    return [_exercise_out(r) for r in rows]
 
 
 async def get_exercise(exercise_id: int) -> dict:
     row = await fetchrow(
-        """
-        SELECT id, owner_id, name, photo_url, video_url, equipment, primary_muscle,
-               secondary_muscles, exercise_type, is_public, created_at
-        FROM exercises WHERE id = $1
-        """,
+        f"SELECT {EXERCISE_COLS} FROM exercises WHERE id = $1",
         exercise_id,
     )
     if row is None:
         raise AppError("EXERCISE_NOT_FOUND", "Упражнение не найдено", http_status=404)
-    return dict(row)
+    return _exercise_out(row)
 
 
 async def create_exercise(owner_id: int | None, payload: ExerciseCreateIn, *, is_public: bool = False) -> dict:
+    photos = [payload.photo_url] if payload.photo_url else []
     row = await fetchrow(
         """
-        INSERT INTO exercises (owner_id, name, photo_url, video_url, equipment, primary_muscle, secondary_muscles, exercise_type, is_public)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-        RETURNING id, owner_id, name, photo_url, video_url, equipment, primary_muscle, secondary_muscles, exercise_type, is_public
+        INSERT INTO exercises (
+            owner_id, name, photo_url, photo_urls, video_url, equipment,
+            primary_muscle, secondary_muscles, exercise_type, is_public
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        RETURNING id
         """,
         owner_id,
         payload.name,
         payload.photo_url,
+        photos,
         payload.video_url,
         payload.equipment,
         payload.primary_muscle,
@@ -64,31 +81,57 @@ async def create_exercise(owner_id: int | None, payload: ExerciseCreateIn, *, is
         payload.exercise_type,
         is_public,
     )
-    return dict(row)
+    return await get_exercise(row["id"])
+
+
+async def set_exercise_media(exercise_id: int, photo_urls: list[str], video_url: str | None) -> dict:
+    await get_exercise(exercise_id)
+    await execute(
+        """
+        UPDATE exercises
+        SET photo_urls = $2,
+            photo_url = $3,
+            video_url = $4
+        WHERE id = $1
+        """,
+        exercise_id,
+        photo_urls,
+        photo_urls[0] if photo_urls else None,
+        video_url,
+    )
+    return await get_exercise(exercise_id)
+
+
+async def set_program_cover(program_id: int, cover_url: str | None) -> dict:
+    await get_program(program_id, None)
+    await execute("UPDATE programs SET cover_url = $2 WHERE id = $1", program_id, cover_url)
+    return await get_program(program_id, None)
 
 
 async def update_exercise(owner_id: int, exercise_id: int, payload: ExerciseCreateIn) -> dict:
     row = await fetchrow("SELECT id, owner_id FROM exercises WHERE id = $1", exercise_id)
     if row is None or row["owner_id"] != owner_id:
         raise AppError("FORBIDDEN", "Можно редактировать только своё упражнение", http_status=403)
+    photos = [payload.photo_url] if payload.photo_url else []
     updated = await fetchrow(
         """
         UPDATE exercises
-        SET name = $2, photo_url = $3, video_url = $4, equipment = $5,
-            primary_muscle = $6, secondary_muscles = $7, exercise_type = $8
+        SET name = $2, photo_url = $3, photo_urls = $4, video_url = $5, equipment = $6,
+            primary_muscle = $7, secondary_muscles = $8, exercise_type = $9
         WHERE id = $1
-        RETURNING id, owner_id, name, photo_url, video_url, equipment, primary_muscle, secondary_muscles, exercise_type, is_public
+        RETURNING id
         """,
         exercise_id,
         payload.name,
         payload.photo_url,
+        photos,
         payload.video_url,
         payload.equipment,
         payload.primary_muscle,
         payload.secondary_muscles,
         payload.exercise_type,
     )
-    return dict(updated)
+    return await get_exercise(updated["id"])
 
 
 async def delete_exercise(owner_id: int, exercise_id: int) -> None:
@@ -108,6 +151,8 @@ async def list_programs(
     page_size: int,
     offset: int,
     published_only: bool = True,
+    q: str | None = None,
+    is_pro: bool | None = None,
 ) -> tuple[list[dict], int]:
     args: list = []
     where = ["p.status = 'published'"] if published_only else ["TRUE"]
@@ -126,6 +171,12 @@ async def list_programs(
     if author_id:
         args.append(author_id)
         where.append(f"p.author_id = ${len(args)}")
+    if q:
+        args.append(f"%{q.strip()}%")
+        where.append(f"(p.title ILIKE ${len(args)} OR COALESCE(p.description, '') ILIKE ${len(args)})")
+    if is_pro is not None:
+        args.append(is_pro)
+        where.append(f"p.is_pro = ${len(args)}")
     where_sql = " AND ".join(where)
     total = await fetchrow(f"SELECT COUNT(*) AS total FROM programs p WHERE {where_sql}", *args)
     args.extend([page_size, offset])
@@ -179,6 +230,22 @@ async def get_program(program_id: int, user_id: int | None) -> dict:
         item = dict(day)
         item["exercises"] = [dict(e) for e in exercises]
         day_items.append(item)
+    has_pro = False
+    if user_id and data.get("is_pro"):
+        sub = await fetchrow(
+            """
+            SELECT id FROM subscriptions
+            WHERE user_id = $1 AND status = 'active' AND ends_at > NOW()
+            LIMIT 1
+            """,
+            user_id,
+        )
+        has_pro = sub is not None
+    for item in day_items:
+        week_index = int(item.get("sort_order") or 0) // 7
+        item["locked"] = bool(data.get("is_pro") and week_index > 0 and not has_pro and data.get("author_id") != user_id)
+        if item["locked"]:
+            item["exercises"] = []
     data["days"] = day_items
     return data
 
@@ -421,26 +488,21 @@ async def delete_day_exercise(program_id: int, day_id: int, item_id: int) -> dic
 
 
 async def admin_update_exercise(exercise_id: int, payload: ExerciseCreateIn) -> dict:
-    row = await fetchrow(
+    await get_exercise(exercise_id)
+    await execute(
         """
         UPDATE exercises
-        SET name = $2, photo_url = $3, video_url = $4, equipment = $5,
-            primary_muscle = $6, secondary_muscles = $7, exercise_type = $8
+        SET name = $2, equipment = $3, primary_muscle = $4, secondary_muscles = $5, exercise_type = $6
         WHERE id = $1
-        RETURNING id, owner_id, name, photo_url, video_url, equipment, primary_muscle, secondary_muscles, exercise_type, is_public
         """,
         exercise_id,
         payload.name,
-        payload.photo_url,
-        payload.video_url,
         payload.equipment,
         payload.primary_muscle,
         payload.secondary_muscles,
         payload.exercise_type,
     )
-    if row is None:
-        raise AppError("EXERCISE_NOT_FOUND", "Упражнение не найдено", http_status=404)
-    return dict(row)
+    return await get_exercise(exercise_id)
 
 
 async def admin_delete_exercise(exercise_id: int) -> None:
@@ -448,3 +510,38 @@ async def admin_delete_exercise(exercise_id: int) -> None:
     if row is None:
         raise AppError("EXERCISE_NOT_FOUND", "Упражнение не найдено", http_status=404)
     await execute("DELETE FROM exercises WHERE id = $1", exercise_id)
+
+
+async def _require_author(program_id: int, user_id: int) -> dict:
+    row = await fetchrow("SELECT id, author_id FROM programs WHERE id = $1", program_id)
+    if row is None:
+        raise AppError("PROGRAM_NOT_FOUND", "Программа не найдена", http_status=404)
+    if row["author_id"] != user_id:
+        raise AppError("FORBIDDEN", "Можно менять только свою программу", http_status=403)
+    return dict(row)
+
+
+async def update_own_program(user_id: int, program_id: int, payload: ProgramCreateIn) -> dict:
+    await _require_author(program_id, user_id)
+    return await admin_update_program(program_id, payload)
+
+
+async def delete_own_program(user_id: int, program_id: int) -> None:
+    await _require_author(program_id, user_id)
+    await admin_delete_program(program_id)
+
+
+async def share_program(user_id: int, program_id: int) -> dict:
+    await get_program(program_id, user_id)
+    row = await fetchrow("SELECT share_token FROM programs WHERE id = $1", program_id)
+    token = row["share_token"] if row and row["share_token"] else uuid4().hex
+    if not row or not row["share_token"]:
+        await execute("UPDATE programs SET share_token = $2 WHERE id = $1", program_id, token)
+    return {"program_id": program_id, "share_token": token}
+
+
+async def get_program_by_token(token: str, user_id: int | None) -> dict:
+    row = await fetchrow("SELECT id FROM programs WHERE share_token = $1", token)
+    if row is None:
+        raise AppError("PROGRAM_NOT_FOUND", "Программа не найдена", http_status=404)
+    return await get_program(row["id"], user_id)

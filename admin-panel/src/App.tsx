@@ -40,7 +40,9 @@ export function App() {
               }
             >
               <Route index element={<DashboardPage />} />
-              <Route path="users" element={<UsersPage />} />
+              <Route path="coaches" element={<UsersPage key="coaches" lockedRole="trainer" />} />
+              <Route path="app-clients" element={<UsersPage key="app-clients" lockedRole="client" />} />
+              <Route path="users" element={<UsersPage key="users" />} />
               <Route path="users/:id" element={<UserDetailPage />} />
               <Route path="clients" element={<ClientsPage />} />
               <Route path="clients/:id" element={<ClientDetailPage />} />

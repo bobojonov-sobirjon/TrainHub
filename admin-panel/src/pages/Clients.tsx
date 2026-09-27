@@ -19,7 +19,7 @@ export function ClientsPage() {
   return (
     <div>
       <div className="page-head">
-        <h1>Клиенты</h1>
+        <h1>Связи Coach–Client</h1>
       </div>
       <Notice error={error ? apiError(error, "Не удалось загрузить клиентов") : ""} />
       <Toolbar>

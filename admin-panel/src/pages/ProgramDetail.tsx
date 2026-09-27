@@ -8,6 +8,7 @@ import { IconBtn, IconPencil, IconPlus, IconTrash } from "../components/IconBtn"
 import { Modal } from "../components/Modal";
 import { Notice } from "../components/Notice";
 import { Select } from "../components/Select";
+import { ImageField } from "../components/MediaFields";
 import { Badge, Section } from "../components/Ui";
 import { apiError } from "../lib/apiError";
 import { dash, initials, labelOf } from "../lib/format";
@@ -57,6 +58,9 @@ export function ProgramDetailPage() {
   const [workoutsPerWeek, setWorkoutsPerWeek] = useState("");
   const [durationWeeks, setDurationWeeks] = useState("");
   const [isPro, setIsPro] = useState(false);
+  const [coverUrl, setCoverUrl] = useState("");
+  const [coverFiles, setCoverFiles] = useState<File[]>([]);
+  const [clearCover, setClearCover] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [dayOpen, setDayOpen] = useState(false);
@@ -94,6 +98,9 @@ export function ProgramDetailPage() {
     setWorkoutsPerWeek(data.workouts_per_week == null ? "" : String(data.workouts_per_week));
     setDurationWeeks(data.duration_weeks == null ? "" : String(data.duration_weeks));
     setIsPro(Boolean(data.is_pro));
+    setCoverUrl(String(data.cover_url ?? ""));
+    setCoverFiles([]);
+    setClearCover(false);
   }, [data]);
 
   async function refreshProgram() {
@@ -173,6 +180,11 @@ export function ProgramDetailPage() {
         duration_weeks: toInt(durationWeeks),
         is_pro: isPro,
       });
+      if (coverFiles[0]) {
+        await adminApi.uploadProgramCover(programId, coverFiles[0]);
+      } else if (clearCover) {
+        await adminApi.uploadProgramCover(programId, undefined, true);
+      }
       await queryClient.invalidateQueries({ queryKey: ["admin-programs"] });
       await queryClient.invalidateQueries({ queryKey: ["admin-program", programId] });
       navigate("/programs", { state: { success: "Программа сохранена" } });
@@ -330,6 +342,22 @@ export function ProgramDetailPage() {
               <input type="checkbox" checked={isPro} onChange={(e) => setIsPro(e.target.checked)} />
               PRO-программа
             </label>
+            <ImageField
+              id="program-edit-cover"
+              label="Обложка"
+              hint="Одно изображение обложки: JPG, PNG, WEBP или GIF."
+              multiple={false}
+              existing={clearCover || !coverUrl ? [] : [coverUrl]}
+              files={coverFiles}
+              onFiles={(next) => {
+                setCoverFiles(next);
+                if (next.length) setClearCover(false);
+              }}
+              onRemoveExisting={() => {
+                setCoverUrl("");
+                setClearCover(true);
+              }}
+            />
             <div className="modal-actions">
               <button type="submit">Сохранить</button>
             </div>

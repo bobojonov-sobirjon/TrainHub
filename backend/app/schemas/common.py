@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -23,6 +24,8 @@ class UserPublic(BaseModel):
     avatar_url: str | None = None
     gender: str | None = None
     birth_date: date | None = None
+    height_cm: Decimal | None = None
+    weight_goal_kg: Decimal | None = None
     roles: list[str] = Field(default_factory=list)
 
 

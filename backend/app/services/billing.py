@@ -218,3 +218,85 @@ async def admin_subscription(subscription_id: int) -> dict:
     if row is None:
         raise AppError("NO_SUBSCRIPTION", "Подписка не найдена", http_status=404)
     return dict(row)
+
+
+async def payment_receipt(user_id: int, payment_id: int) -> dict:
+    row = await fetchrow(
+        """
+        SELECT p.id, p.amount, p.currency, p.status, p.paid_at, p.created_at,
+               p.subscription_id, pl.code AS plan_code, pl.period
+        FROM payments p
+        LEFT JOIN subscriptions s ON s.id = p.subscription_id
+        LEFT JOIN subscription_plans pl ON pl.id = s.plan_id
+        WHERE p.id = $1 AND p.user_id = $2
+        """,
+        payment_id,
+        user_id,
+    )
+    if row is None:
+        raise AppError("PAYMENT_NOT_FOUND", "Платёж не найден", http_status=404)
+    return dict(row)
+
+
+async def retry_payment(user_id: int, payment_id: int) -> dict:
+    pay = await fetchrow(
+        "SELECT id, subscription_id, status FROM payments WHERE id = $1 AND user_id = $2",
+        payment_id,
+        user_id,
+    )
+    if pay is None:
+        raise AppError("PAYMENT_NOT_FOUND", "Платёж не найден", http_status=404)
+    if pay["status"] != "failed":
+        raise AppError("VALIDATION_ERROR", "Повторить можно только ошибочный платёж", http_status=422)
+    sub = await fetchrow("SELECT plan_id FROM subscriptions WHERE id = $1 AND user_id = $2", pay["subscription_id"], user_id)
+    if sub is None:
+        raise AppError("NO_SUBSCRIPTION", "Подписка не найдена", http_status=404)
+    return await checkout_mock(user_id, sub["plan_id"])
+
+
+async def patch_subscription(user_id: int, plan_id: int | None, auto_renew: bool | None) -> dict:
+    if plan_id is not None:
+        return await checkout_mock(user_id, plan_id)
+    sub = await current_subscription(user_id, None)
+    if sub is None:
+        raise AppError("NO_SUBSCRIPTION", "Подписка не найдена", http_status=404)
+    if auto_renew is True:
+        return await resume_subscription(user_id)
+    if auto_renew is False:
+        return await cancel_subscription(user_id)
+    return sub
+
+
+async def list_payment_methods(user_id: int) -> list[dict]:
+    rows = await fetch(
+        "SELECT id, brand, last4, is_default, created_at FROM payment_methods WHERE user_id = $1 ORDER BY is_default DESC, id DESC",
+        user_id,
+    )
+    return [dict(r) for r in rows]
+
+
+async def add_payment_method(user_id: int, brand: str, last4: str, is_default: bool) -> dict:
+    if is_default:
+        await execute("UPDATE payment_methods SET is_default = FALSE WHERE user_id = $1", user_id)
+    row = await fetchrow(
+        """
+        INSERT INTO payment_methods (user_id, brand, last4, is_default)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, brand, last4, is_default, created_at
+        """,
+        user_id,
+        brand,
+        last4,
+        is_default,
+    )
+    return dict(row)
+
+
+async def delete_payment_method(user_id: int, method_id: int) -> None:
+    row = await fetchrow(
+        "DELETE FROM payment_methods WHERE id = $1 AND user_id = $2 RETURNING id",
+        method_id,
+        user_id,
+    )
+    if row is None:
+        raise AppError("NOT_FOUND", "Способ оплаты не найден", http_status=404)

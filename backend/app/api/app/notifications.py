@@ -10,7 +10,12 @@ from app.services import cabinet as cab
 router = APIRouter()
 
 
-@router.get("/notifications", tags=["App - Notifications"], summary="Уведомления")
+@router.get("/notifications/unread-count", tags=["Shared - Notifications"], summary="Число непрочитанных")
+async def unread(user: Annotated[UserPublic, Depends(get_app_user)]) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await cab.unread_count(user.id))
+
+
+@router.get("/notifications", tags=["Shared - Notifications"], summary="Уведомления")
 async def list_notifications(
     user: Annotated[UserPublic, Depends(get_app_user)],
     tab: str = "today",
@@ -20,7 +25,7 @@ async def list_notifications(
 
 @router.post(
     "/notifications/{note_id}/read",
-    tags=["App - Notifications"],
+    tags=["Shared - Notifications"],
     summary="Отметить уведомление прочитанным",
     description="Тело запроса не требуется.",
 )
@@ -31,7 +36,7 @@ async def read_one(note_id: int, user: Annotated[UserPublic, Depends(get_app_use
 
 @router.post(
     "/notifications/read-all",
-    tags=["App - Notifications"],
+    tags=["Shared - Notifications"],
     summary="Прочитать все уведомления",
     description="Тело запроса не требуется.",
 )
@@ -40,14 +45,14 @@ async def read_all(user: Annotated[UserPublic, Depends(get_app_user)]) -> Succes
     return SuccessResponse(data={"ok": True})
 
 
-@router.get("/me/notification-preferences", tags=["App - Notifications"], summary="Настройки уведомлений")
+@router.get("/me/notification-preferences", tags=["Shared - Notifications"], summary="Настройки уведомлений")
 async def get_prefs(user: Annotated[UserPublic, Depends(get_app_user)]) -> SuccessResponse[dict]:
     return SuccessResponse(data=await cab.get_prefs(user.id))
 
 
 @router.patch(
     "/me/notification-preferences",
-    tags=["App - Notifications"],
+    tags=["Shared - Notifications"],
     summary="Обновить настройки уведомлений",
     description="Передайте только изменяемые флаги. Остальные сохраняются.",
 )

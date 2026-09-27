@@ -1,12 +1,31 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.core.exceptions import AppError
 from app.db.connection import execute, fetch, fetchrow
+from app.services.notify import create_notification
 
 
-async def list_events(trainer_id: int, date_from: datetime | None, date_to: datetime | None) -> list[dict]:
+async def _trainer_name(trainer_id: int) -> str:
+    row = await fetchrow("SELECT first_name, last_name FROM users WHERE id = $1", trainer_id)
+    if not row:
+        return "Тренер"
+    return f"{row['first_name']} {row['last_name']}".strip() or "Тренер"
+
+
+async def list_events(
+    trainer_id: int,
+    date_from: datetime | None,
+    date_to: datetime | None,
+    *,
+    week: datetime | None = None,
+) -> list[dict]:
     args: list = [trainer_id]
     where = ["e.trainer_id = $1"]
+    if week:
+        start = week.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = start - timedelta(days=start.weekday())
+        date_from = start
+        date_to = start + timedelta(days=7)
     if date_from:
         args.append(date_from)
         where.append(f"e.starts_at >= ${len(args)}")
@@ -18,9 +37,12 @@ async def list_events(trainer_id: int, date_from: datetime | None, date_to: date
         SELECT
             e.id, e.client_id, e.starts_at, e.ends_at, e.duration_min, e.format,
             e.kinds, e.focus_muscles, e.status, e.note, e.reminder, e.repeat_weekly, e.session_id,
-            u.first_name, u.last_name, u.phone
+            u.first_name, u.last_name, u.phone, u.avatar_url,
+            tc.created_at AS client_since
         FROM calendar_events e
         LEFT JOIN users u ON u.id = e.client_id
+        LEFT JOIN trainer_clients tc ON tc.trainer_id = e.trainer_id AND tc.client_id = e.client_id
+            AND tc.archived_at IS NULL
         WHERE {" AND ".join(where)}
         ORDER BY e.starts_at ASC
         """,
@@ -70,15 +92,28 @@ async def create_event(trainer_id: int, payload) -> dict:
                 row["id"],
                 week,
             )
-    return await get_event(trainer_id, row["id"])
+    event = await get_event(trainer_id, row["id"])
+    if event.get("client_id"):
+        when = payload.starts_at.strftime("%d.%m %H:%M")
+        await create_notification(
+            event["client_id"],
+            ntype="workout",
+            title="Тренировка назначена",
+            body=f"{await _trainer_name(trainer_id)}: {when}",
+            payload={"event_id": event["id"], "starts_at": str(event["starts_at"])},
+        )
+    return event
 
 
 async def get_event(trainer_id: int, event_id: int) -> dict:
     row = await fetchrow(
         """
-        SELECT e.*, u.first_name, u.last_name, u.phone
+        SELECT e.*, u.first_name, u.last_name, u.phone, u.avatar_url,
+               tc.created_at AS client_since
         FROM calendar_events e
         LEFT JOIN users u ON u.id = e.client_id
+        LEFT JOIN trainer_clients tc ON tc.trainer_id = e.trainer_id AND tc.client_id = e.client_id
+            AND tc.archived_at IS NULL
         WHERE e.id = $1 AND e.trainer_id = $2
         """,
         event_id,
@@ -132,9 +167,35 @@ async def cancel_event(trainer_id: int, event_id: int) -> dict:
             trainer_id,
             event["client_id"],
         )
+        await create_notification(
+            event["client_id"],
+            ntype="workout_cancelled",
+            title="Тренировка отменена",
+            body=f"{await _trainer_name(trainer_id)} отменил(а) занятие",
+            payload={"event_id": event_id},
+        )
     return await get_event(trainer_id, event_id)
 
 
 async def delete_event(trainer_id: int, event_id: int) -> None:
     await get_event(trainer_id, event_id)
     await execute("DELETE FROM calendar_events WHERE id = $1 AND trainer_id = $2", event_id, trainer_id)
+
+
+async def mark_no_show(trainer_id: int, event_id: int) -> dict:
+    event = await get_event(trainer_id, event_id)
+    await execute(
+        "UPDATE calendar_events SET status = 'no_show' WHERE id = $1 AND trainer_id = $2",
+        event_id,
+        trainer_id,
+    )
+    if event.get("client_id"):
+        await execute(
+            """
+            INSERT INTO attention_items (trainer_id, client_id, reason)
+            VALUES ($1, $2, 'no_show')
+            """,
+            trainer_id,
+            event["client_id"],
+        )
+    return await get_event(trainer_id, event_id)

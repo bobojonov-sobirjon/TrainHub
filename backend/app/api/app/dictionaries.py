@@ -9,7 +9,7 @@ router = APIRouter()
 @router.get(
     "/dictionaries",
     response_model=SuccessResponse[DictionariesData],
-    tags=["App - Dictionaries"],
+    tags=["Shared - Dictionaries"],
     summary="Справочники",
     description="Коды и русские названия: уровень, цели, мышцы, оборудование, форматы.",
 )

@@ -42,6 +42,35 @@ class Settings(BaseSettings):
     seed_admin_email: str = "admin@trainhub.local"
     seed_admin_password: str = "ChangeMeAdmin1"
 
+    google_client_ids: str = ""
+    apple_bundle_ids: str = ""
+    firebase_type: str = "service_account"
+    firebase_project_id: str = ""
+    firebase_private_key_id: str = ""
+    firebase_private_key: str = ""
+    firebase_client_email: str = ""
+    firebase_client_id: str = ""
+    firebase_auth_uri: str = "https://accounts.google.com/o/oauth2/auth"
+    firebase_token_uri: str = "https://oauth2.googleapis.com/token"
+    firebase_auth_provider_x509_cert_url: str = "https://www.googleapis.com/oauth2/v1/certs"
+    firebase_client_x509_cert_url: str = ""
+    firebase_universe_domain: str = "googleapis.com"
+    telegram_bot_token: str = ""
+    telegram_bot_username: str = ""
+    telegram_webhook_secret: str = ""
+    telegram_gateway_token: str = ""
+    sms_eskiz_email: str = ""
+    sms_eskiz_password: str = ""
+    sms_eskiz_from: str = "4546"
+
+    @property
+    def google_audiences(self) -> list[str]:
+        return [item.strip() for item in self.google_client_ids.split(",") if item.strip()]
+
+    @property
+    def apple_audiences(self) -> list[str]:
+        return [item.strip() for item in self.apple_bundle_ids.split(",") if item.strip()]
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"

@@ -5,7 +5,7 @@ from httpx import AsyncClient
 
 
 def _unique_email() -> str:
-    return f"user_{uuid.uuid4().hex[:10]}@trainhub.test"
+    return f"user_{uuid.uuid4().hex[:10]}@example.com"
 
 
 @pytest.mark.asyncio

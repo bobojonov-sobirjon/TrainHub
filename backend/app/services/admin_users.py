@@ -121,6 +121,9 @@ async def dashboard() -> dict:
             (SELECT COUNT(*) FROM users) AS users,
             (SELECT COUNT(*) FROM user_roles WHERE role = 'trainer') AS trainers,
             (SELECT COUNT(*) FROM user_roles WHERE role = 'client') AS clients,
+            (SELECT COUNT(*) FROM user_roles WHERE role = 'trainer') AS coaches,
+            (SELECT COUNT(*) FROM subscriptions WHERE status = 'active' AND ends_at > NOW() AND audience = 'pro_trainer') AS coach_pro,
+            (SELECT COUNT(*) FROM subscriptions WHERE status = 'active' AND ends_at > NOW() AND audience = 'pro_client') AS client_pro,
             (SELECT COUNT(*) FROM workout_sessions WHERE status = 'in_progress') AS active_sessions,
             (SELECT COUNT(*) FROM subscriptions WHERE status = 'active' AND ends_at > NOW()) AS active_subscriptions
         """

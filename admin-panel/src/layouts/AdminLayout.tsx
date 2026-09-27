@@ -3,8 +3,9 @@ import { useAuth } from "../hooks/useAuth";
 
 const links = [
   { to: "/", label: "Дашборд" },
-  { to: "/users", label: "Пользователи" },
-  { to: "/clients", label: "Клиенты" },
+  { to: "/coaches", label: "Coach" },
+  { to: "/app-clients", label: "Client" },
+  { to: "/clients", label: "Связи" },
   { to: "/programs", label: "Программы" },
   { to: "/exercises", label: "Упражнения" },
   { to: "/payments", label: "Платежи" },

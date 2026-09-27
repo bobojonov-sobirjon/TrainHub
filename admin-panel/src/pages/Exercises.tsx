@@ -7,6 +7,7 @@ import { IconBtn, IconOpen, IconTrash } from "../components/IconBtn";
 import { Modal } from "../components/Modal";
 import { Notice } from "../components/Notice";
 import { Select } from "../components/Select";
+import { FileField, ImageField } from "../components/MediaFields";
 import { Badge, EntityCell } from "../components/Ui";
 import { useFlashSuccess } from "../hooks/useFlashSuccess";
 import { apiError } from "../lib/apiError";
@@ -19,8 +20,8 @@ const emptyExercise = {
   equipment: "",
   kind: "strength",
   secondary: [] as string[],
-  photoUrl: "",
-  videoUrl: "",
+  photos: [] as File[],
+  video: null as File | null,
 };
 
 export function ExercisesPage() {
@@ -53,15 +54,15 @@ export function ExercisesPage() {
     setSuccess("");
     setSaving(true);
     try {
-      await adminApi.createExercise({
-        name: form.name.trim(),
-        primary_muscle: form.muscle,
-        equipment: form.equipment || null,
-        secondary_muscles: form.secondary,
-        exercise_type: form.kind,
-        photo_url: form.photoUrl.trim() || null,
-        video_url: form.videoUrl.trim() || null,
-      });
+      const payload = new FormData();
+      payload.append("name", form.name.trim());
+      payload.append("primary_muscle", form.muscle);
+      payload.append("equipment", form.equipment);
+      payload.append("exercise_type", form.kind);
+      payload.append("secondary_muscles", JSON.stringify(form.secondary));
+      form.photos.forEach((file) => payload.append("photos", file));
+      if (form.video) payload.append("video", form.video);
+      await adminApi.createExercise(payload);
       closeModal();
       await queryClient.invalidateQueries({ queryKey: ["admin-exercises"] });
       setSuccess("Упражнение создано");
@@ -190,22 +191,16 @@ export function ExercisesPage() {
               onChange={(secondary) => setForm((current) => ({ ...current, secondary }))}
             />
           </label>
-          <label>
-            Фото (URL)
-            <input
-              value={form.photoUrl}
-              onChange={(e) => setForm((current) => ({ ...current, photoUrl: e.target.value }))}
-              placeholder="https://"
-            />
-          </label>
-          <label>
-            Видео (URL)
-            <input
-              value={form.videoUrl}
-              onChange={(e) => setForm((current) => ({ ...current, videoUrl: e.target.value }))}
-              placeholder="https://"
-            />
-          </label>
+          <ImageField
+            id="exercise-create-photos"
+            files={form.photos}
+            onFiles={(photos) => setForm((current) => ({ ...current, photos }))}
+          />
+          <FileField
+            id="exercise-create-video"
+            file={form.video}
+            onFile={(video) => setForm((current) => ({ ...current, video }))}
+          />
           <div className="modal-actions">
             <button type="button" className="ghost" onClick={closeModal}>
               Отмена

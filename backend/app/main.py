@@ -17,81 +17,26 @@ from app.core.exceptions import (
     validation_error_handler,
 )
 from app.core.logging import setup_logging
+from app.core.tags import TAG_DESCRIPTIONS, TAG_ORDER
 from app.db.pool import close_pool, create_pool
 from app.deps.redis import close_redis
 from app.services.storage import ensure_media_dir, media_root
-
-TAG_ORDER = [
-    "Health",
-    "App - Auth",
-    "App - Profile",
-    "App - Dictionaries",
-    "App - Trainer",
-    "App - Trainers",
-    "App - Clients",
-    "App - Calendar",
-    "App - Exercises",
-    "App - Programs",
-    "App - Sessions",
-    "App - Client",
-    "App - Billing",
-    "App - FAQ",
-    "App - Legal",
-    "App - Support",
-    "App - Notifications",
-    "Admin - Auth",
-    "Admin - Profile",
-    "Admin - Dashboard",
-    "Admin - Dictionaries",
-    "Admin - Users",
-    "Admin - Clients",
-    "Admin - Programs",
-    "Admin - Exercises",
-    "Admin - Billing",
-    "Admin - FAQ",
-    "Admin - Legal",
-    "Admin - Tickets",
-]
-
-TAG_DESCRIPTIONS = {
-    "Health": "Проверка доступности API и подключения к PostgreSQL.",
-    "App - Auth": "Регистрация, вход, обновление и отзыв JWT приложения (клиент/тренер).",
-    "App - Profile": "Текущий пользователь приложения.",
-    "App - Dictionaries": "Справочники: уровень, цели, мышцы, оборудование, форматы.",
-    "App - Trainer": "Кабинет тренера: профиль, дашборд, отчёты, внимание.",
-    "App - Trainers": "Публичный каталог тренеров и заявка клиента на сотрудничество.",
-    "App - Clients": "Клиенты тренера: поиск, ручное добавление, заявки, замеры, график, заметки, статистика и сессии.",
-    "App - Calendar": "Календарь тренировок тренера: создание, отмена, старт сессии.",
-    "App - Exercises": "Каталог упражнений: публичные и пользовательские.",
-    "App - Programs": "Готовые и собственные программы, сохранение и копирование.",
-    "App - Sessions": "Живые тренировки: старт, подходы, завершение.",
-    "App - Client": "Кабинет клиента: дом, замеры, фотопрогресс, заметки, история.",
-    "App - Billing": "Тарифы, подписка, оплата и mock-webhook.",
-    "App - FAQ": "Публичные статьи FAQ.",
-    "App - Legal": "Пользовательское соглашение и политика конфиденциальности.",
-    "App - Support": "Обращения в поддержку от пользователя.",
-    "App - Notifications": "Уведомления и настройки рассылок.",
-    "Admin - Auth": "Вход администратора, refresh и выход. Только роль admin.",
-    "Admin - Profile": "Текущий администратор.",
-    "Admin - Dashboard": "Сводка по пользователям, сессиям и подпискам.",
-    "Admin - Dictionaries": "Справочники для админ-панели (те же коды, что в приложении).",
-    "Admin - Users": "Пользователи: список, карточка, блокировка, верификация тренера.",
-    "Admin - Clients": "Связи тренер–клиент.",
-    "Admin - Programs": "Каталог программ: создание, правка, архив, дни и упражнения дня.",
-    "Admin - Exercises": "Каталог упражнений: создание, правка, удаление.",
-    "Admin - Billing": "Тарифы, платежи и подписки.",
-    "Admin - FAQ": "Управление статьями FAQ.",
-    "Admin - Legal": "Редактор юридических документов: текст или файл PDF/DOC/DOCX.",
-    "Admin - Tickets": "Обращения поддержки и смена статуса.",
-}
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     setup_logging()
     ensure_media_dir()
+    from app.services.firebase import init_firebase
+
+    init_firebase()
     await create_pool()
+    from app.services.telegram_auth import start_telegram_listener
+
+    telegram_task = await start_telegram_listener()
     yield
+    if telegram_task:
+        telegram_task.cancel()
     await close_redis()
     await close_pool()
 
@@ -130,6 +75,8 @@ def custom_openapi(app: FastAPI) -> dict:
         version="1.0.0",
         description=(
             "API мобильного приложения (`/api/v1/app`) и админ-панели (`/api/v1/admin`). "
+            "Две роли приложения: **Coach** (тренер) и **Client** (клиент). "
+            "Теги Swagger сгруппированы: `Coach - …`, `Client - …`, `Shared - …`, `Admin - …`. "
             "Авторизация: Bearer JWT. App-токены и admin-токены разделены (`aud=app` / `aud=admin`). "
             "Для POST, PUT и PATCH в схемах указаны описания полей и примеры тела запроса. "
             "DELETE и часть POST не принимают тело — все параметры в пути."

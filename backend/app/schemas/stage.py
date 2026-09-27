@@ -91,7 +91,9 @@ class MeasurementIn(BaseModel):
     calf_cm: Decimal | None = Field(default=None, description="Икра, см", examples=["38.0"])
     neck_cm: Decimal | None = Field(default=None, description="Шея, см", examples=["38.0"])
     shoulders_cm: Decimal | None = Field(default=None, description="Плечи, см", examples=["118.0"])
-    arm_cm: Decimal | None = Field(default=None, description="Рука, см", examples=["36.0"])
+    arm_cm: Decimal | None = Field(default=None, description="Рука, см (общее)", examples=["36.0"])
+    arm_left_cm: Decimal | None = Field(default=None, description="Бицепс левый, см", examples=["37.0"])
+    arm_right_cm: Decimal | None = Field(default=None, description="Бицепс правый, см", examples=["37.5"])
     forearm_cm: Decimal | None = Field(default=None, description="Предплечье, см", examples=["29.0"])
 
 
@@ -143,6 +145,7 @@ class ClientPatchIn(BaseModel):
     status: str | None = Field(default=None, description="Статус связи: new, permanent, paused, archived", examples=["permanent"])
     goals: list[str] | None = Field(default=None, description="Цели клиента", examples=[["gain_muscle"]])
     training_format: str | None = Field(default=None, description="Формат тренировок", examples=["online"])
+    target_weight_kg: Decimal | None = Field(default=None, description="Целевой вес клиента, кг", examples=["75.0"])
 
 
 class ClientCard(BaseModel):
@@ -184,7 +187,7 @@ class CalendarIn(BaseModel):
     format: str | None = Field(default=None, description="Формат: gym, online, hybrid, home, visit", examples=["gym"])
     kinds: list[str] = Field(default_factory=list, description="Типы тренировки из workout_kind", examples=[["strength"]])
     focus_muscles: list[str] = Field(default_factory=list, description="Целевые мышцы из muscle_group", examples=[["chest", "triceps"]])
-    note: str | None = Field(default=None, description="Комментарий к событию", examples=["Жимовая тренировка"])
+    note: str | None = Field(default=None, max_length=200, description="Комментарий к событию, до 200 символов", examples=["Жимовая тренировка"])
     reminder: str = Field(default="none", description="Напоминание: none, 15m, 1h, 1d", examples=["1h"])
     repeat_weekly: bool = Field(default=False, description="Повторять каждую неделю", examples=[False])
     status: str = Field(default="scheduled", description="Статус: scheduled, cancelled, done", examples=["scheduled"])
@@ -230,8 +233,8 @@ class ExerciseCreateIn(BaseModel):
                     "primary_muscle": "chest",
                     "secondary_muscles": ["triceps", "shoulders"],
                     "exercise_type": "strength",
-                    "photo_url": "https://cdn.example.com/bench-press.jpg",
-                    "video_url": "https://cdn.example.com/bench-press.mp4",
+                    "photo_url": None,
+                    "video_url": None,
                 }
             ]
         }
@@ -242,8 +245,8 @@ class ExerciseCreateIn(BaseModel):
     primary_muscle: str | None = Field(default=None, description="Основная мышца из muscle_group", examples=["chest"])
     secondary_muscles: list[str] = Field(default_factory=list, description="Дополнительные мышцы", examples=[["triceps", "shoulders"]])
     exercise_type: str = Field(default="strength", description="Тип из workout_kind", examples=["strength"])
-    photo_url: str | None = Field(default=None, description="URL фото", examples=["https://cdn.example.com/bench-press.jpg"])
-    video_url: str | None = Field(default=None, description="URL видео", examples=["https://cdn.example.com/bench-press.mp4"])
+    photo_url: str | None = Field(default=None, description="Первое фото после загрузки файла", examples=[None])
+    video_url: str | None = Field(default=None, description="Видео после загрузки файла", examples=[None])
 
 
 class ProgramCreateIn(BaseModel):
@@ -426,6 +429,7 @@ class ProfilePatchIn(BaseModel):
                     "gender": "male",
                     "birth_date": "1994-05-12",
                     "height_cm": "180.0",
+                    "weight_goal_kg": "75.0",
                 }
             ]
         }
@@ -436,6 +440,7 @@ class ProfilePatchIn(BaseModel):
     gender: str | None = Field(default=None, description="Пол: male, female, other", examples=["male"])
     birth_date: date | None = Field(default=None, description="Дата рождения", examples=["1994-05-12"])
     height_cm: Decimal | None = Field(default=None, description="Рост, см", examples=["180.0"])
+    weight_goal_kg: Decimal | None = Field(default=None, description="Целевой вес, кг", examples=["75.0"])
 
 
 class SessionExerciseIn(BaseModel):
@@ -449,6 +454,28 @@ class TicketStatusIn(BaseModel):
     model_config = ConfigDict(json_schema_extra={"examples": [{"status": "in_progress"}]})
 
     status: str = Field(description="Статус: open, in_progress, answered, closed", examples=["in_progress"])
+
+
+class ReviewIn(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"rating": "5.0", "text": "Отличный тренер"}]})
+
+    rating: Decimal = Field(description="Оценка от 1 до 5", examples=["5.0"], ge=1, le=5)
+    text: str = Field(default="", max_length=1000, description="Текст отзыва", examples=["Отличный тренер"])
+
+
+class PaymentMethodIn(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"brand": "visa", "last4": "4417", "is_default": True}]})
+
+    brand: str = Field(default="card", max_length=32, description="Бренд карты", examples=["visa"])
+    last4: str = Field(description="Последние 4 цифры", examples=["4417"], min_length=4, max_length=4)
+    is_default: bool = Field(default=True, description="Сделать картой по умолчанию", examples=[True])
+
+
+class SubscriptionPatchIn(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"plan_id": 1, "auto_renew": True}]})
+
+    plan_id: int | None = Field(default=None, description="Новый тариф из GET /plans", examples=[1], ge=1)
+    auto_renew: bool | None = Field(default=None, description="Автопродление", examples=[True])
 
 
 class WebhookMockIn(BaseModel):

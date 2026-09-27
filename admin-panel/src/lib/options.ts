@@ -3,8 +3,8 @@ import { adminApi } from "../api/resources";
 import type { SelectOption } from "../components/Select";
 
 export const ROLE_OPTIONS: SelectOption[] = [
-  { value: "client", label: "клиент" },
-  { value: "trainer", label: "тренер" },
+  { value: "client", label: "Client" },
+  { value: "trainer", label: "Coach" },
   { value: "admin", label: "админ" },
 ];
 
@@ -23,8 +23,8 @@ export const PROGRAM_STATUS_OPTIONS: SelectOption[] = [
 
 export const FAQ_AUDIENCE_OPTIONS: SelectOption[] = [
   { value: "all", label: "все" },
-  { value: "trainer", label: "тренер" },
-  { value: "client", label: "клиент" },
+  { value: "trainer", label: "Coach" },
+  { value: "client", label: "Client" },
 ];
 
 export const LEGAL_OPTIONS: SelectOption[] = [
@@ -38,8 +38,8 @@ export const LEGAL_LABELS: Record<string, string> = {
 };
 
 export const ROLE_LABELS: Record<string, string> = {
-  client: "клиент",
-  trainer: "тренер",
+  client: "Client",
+  trainer: "Coach",
   admin: "админ",
 };
 
@@ -88,8 +88,8 @@ export const PERIOD_LABELS: Record<string, string> = {
 
 export const FAQ_AUDIENCE_LABELS: Record<string, string> = {
   all: "все",
-  trainer: "тренер",
-  client: "клиент",
+  trainer: "Coach",
+  client: "Client",
 };
 
 export const TICKET_STATUS_LABELS: Record<string, string> = {

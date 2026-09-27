@@ -10,7 +10,7 @@ from app.services import clients as svc
 router = APIRouter()
 
 
-@router.get("/clients", tags=["Admin - Clients"], summary="Связи тренер–клиент")
+@router.get("/clients", tags=["Admin - Links"], summary="Связи тренер–клиент")
 async def list_clients(
     _user: Annotated[UserPublic, Depends(get_admin_user)],
     q: str | None = None,
@@ -22,7 +22,7 @@ async def list_clients(
     return SuccessResponse(data=Page(items=items, total=total, page=page, page_size=page_size))
 
 
-@router.get("/clients/{link_id}", tags=["Admin - Clients"], summary="Карточка связи")
+@router.get("/clients/{link_id}", tags=["Admin - Links"], summary="Карточка связи")
 async def client_detail(
     link_id: int, _user: Annotated[UserPublic, Depends(get_admin_user)]
 ) -> SuccessResponse[dict]:
