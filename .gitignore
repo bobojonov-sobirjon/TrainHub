@@ -15,3 +15,6 @@ admin-panel/dist/
 .vscode/
 *.log
 backend/media/
+backend/firebase-sa.json
+backend/.firebase.env.fragment
+backend/secrets/

@@ -1,13 +1,24 @@
+import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import PlainTextResponse
 
 from app.deps.auth import get_app_user
 from app.schemas.common import SuccessResponse, UserPublic
 from app.schemas.stage import CheckoutIn, PaymentMethodIn, SubscriptionPatchIn, WebhookMockIn
 from app.services import billing as bill
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def _form_or_query(request: Request) -> dict[str, str]:
+    data = {key: str(value) for key, value in request.query_params.items()}
+    if request.method == "POST":
+        form = await request.form()
+        data.update({key: str(value) for key, value in form.items()})
+    return data
 
 
 @router.get("/plans", tags=["Shared - Billing"], summary="Тарифы")
@@ -26,11 +37,15 @@ async def status(
 @router.post(
     "/me/subscription/checkout",
     tags=["Shared - Billing"],
-    summary="Оформить подписку (mock)",
-    description="Создаёт mock-оплату по `plan_id` из списка тарифов.",
+    summary="Оформить подписку",
+    description=(
+        "Создаёт платёж `pending` и возвращает `payment_url` Robokassa. "
+        "PRO активируется только после Result URL (`OK{InvId}`). "
+        "Если Robokassa не настроена — mock, сразу `active`."
+    ),
 )
 async def checkout(payload: CheckoutIn, user: Annotated[UserPublic, Depends(get_app_user)]) -> SuccessResponse[dict]:
-    return SuccessResponse(data=await bill.checkout_mock(user.id, payload.plan_id))
+    return SuccessResponse(data=await bill.checkout(user.id, payload.plan_id))
 
 
 @router.post(
@@ -57,7 +72,7 @@ async def resume(user: Annotated[UserPublic, Depends(get_app_user)]) -> SuccessR
     "/me/subscription",
     tags=["Shared - Billing"],
     summary="Изменить тариф или автопродление",
-    description="`plan_id` — новый тариф (mock checkout). `auto_renew` — вкл/выкл автопродление.",
+    description="`plan_id` — новый тариф (новый checkout). `auto_renew` — вкл/выкл автопродление.",
 )
 async def patch_subscription(
     payload: SubscriptionPatchIn, user: Annotated[UserPublic, Depends(get_app_user)]
@@ -80,8 +95,8 @@ async def payment_receipt(
 @router.post(
     "/payments/{payment_id}/retry",
     tags=["Shared - Billing"],
-    summary="Повторить ошибочный платёж",
-    description="Только для статуса `failed`. Создаёт новую mock-оплату по тому же тарифу.",
+    summary="Повторить незавершённый платёж",
+    description="Для `pending` и `failed`. Создаёт новый checkout по тому же тарифу.",
 )
 async def retry_payment(
     payment_id: int, user: Annotated[UserPublic, Depends(get_app_user)]
@@ -129,3 +144,31 @@ async def delete_payment_method(
 )
 async def webhook(payload: WebhookMockIn) -> SuccessResponse[dict]:
     return SuccessResponse(data=await bill.webhook_mock(payload.event_id, payload.user_id, payload.plan_id))
+
+
+@router.api_route(
+    "/webhooks/payments/robokassa",
+    methods=["GET", "POST"],
+    tags=["Shared - Billing"],
+    summary="Robokassa Result URL",
+    description=(
+        "Result URL магазина. Ответ — текст `OK{InvId}`, не JSON. "
+        "В кабинете Robokassa укажите полный путь и метод POST."
+    ),
+)
+async def robokassa_result(request: Request) -> PlainTextResponse:
+    try:
+        body = await bill.webhook_robokassa(await _form_or_query(request))
+    except Exception:
+        logger.exception("robokassa result failed")
+        body = "error"
+    return PlainTextResponse(content=body, status_code=200)
+
+
+@router.api_route(
+    "/webhooks/payments/robo",
+    methods=["GET", "POST"],
+    include_in_schema=False,
+)
+async def robokassa_result_alias(request: Request) -> PlainTextResponse:
+    return await robokassa_result(request)

@@ -32,6 +32,20 @@ async def exercises(
     return SuccessResponse(data=await cat.list_exercises(q, equipment, muscle, user.id))
 
 
+@router.get(
+    "/exercises/{exercise_id}",
+    tags=["Shared - Exercises"],
+    summary="Карточка упражнения",
+    description="Имя, мышцы, оборудование, фото и `video_url`. Нет видео — `video_url` null, `has_video` false.",
+)
+async def exercise_detail(
+    exercise_id: int, user: Annotated[UserPublic, Depends(get_app_user)]
+) -> SuccessResponse[dict]:
+    data = await cat.get_exercise(exercise_id)
+    data["has_video"] = bool(data.get("video_url"))
+    return SuccessResponse(data=data)
+
+
 @router.post(
     "/exercises",
     tags=["Shared - Exercises"],
@@ -101,7 +115,15 @@ async def shared_program(
     return SuccessResponse(data=await cat.get_program_by_token(token, user.id))
 
 
-@router.get("/programs/{program_id}", tags=["Shared - Programs"], summary="Карточка программы")
+@router.get(
+    "/programs/{program_id}",
+    tags=["Shared - Programs"],
+    summary="Карточка программы",
+    description=(
+        "Дни и упражнения. У каждого упражнения: `video_url`, `has_video`, фото, мышцы, sets/reps. "
+        "Видео — ссылка, не отдельная платформа. PRO-дни без подписки: `locked=true`, exercises пустой."
+    ),
+)
 async def program_detail(
     program_id: int, user: Annotated[UserPublic, Depends(get_app_user)]
 ) -> SuccessResponse[dict]:
@@ -273,7 +295,10 @@ async def duplicate(program_id: int, user: Annotated[UserPublic, Depends(get_app
     "/sessions",
     tags=["Shared - Sessions"],
     summary="Начать тренировку",
-    description="Создаёт живую сессию. Можно привязать клиентов, день программы или событие календаря.",
+    description=(
+        "Создаёт живую сессию. Coach передаёт `client_ids`. "
+        "Client начинает свою тренировку без тренера: `client_ids` игнорируется, `trainer_id` будет null."
+    ),
 )
 async def create_session(
     payload: SessionCreateIn, user: Annotated[UserPublic, Depends(get_app_user)]
@@ -324,12 +349,41 @@ async def complete(session_id: int, user: Annotated[UserPublic, Depends(get_app_
     return SuccessResponse(data=await sess.complete_session(session_id, user.id, ROLE_TRAINER in user.roles))
 
 
-@router.get("/sessions/{session_id}/previous/{exercise_id}", tags=["Shared - Sessions"], summary="Прошлый результат")
+@router.patch(
+    "/sessions/{session_id}/sets/{set_id}",
+    tags=["Shared - Sessions"],
+    summary="Изменить подход",
+    description="Обновляет вес, повторения или флаг разминки у подхода текущей сессии.",
+)
+async def patch_set(
+    session_id: int, set_id: int, payload: SetIn, user: Annotated[UserPublic, Depends(get_app_user)]
+) -> SuccessResponse[dict]:
+    return SuccessResponse(
+        data=await sess.patch_set(session_id, set_id, user.id, ROLE_TRAINER in user.roles, payload)
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/previous/{exercise_id}",
+    tags=["Shared - Sessions"],
+    summary="Прошлый результат",
+    description=(
+        "Подходы прошлого завершённого занятия по этому упражнению: вес и повторения. "
+        "Client всегда видит свои. Coach может передать `client_id` своего ученика."
+    ),
+)
 async def previous(
     session_id: int,
     exercise_id: int,
     user: Annotated[UserPublic, Depends(get_app_user)],
     client_id: int | None = None,
 ) -> SuccessResponse[list]:
-    cid = client_id or user.id
-    return SuccessResponse(data=await sess.previous_sets(session_id, exercise_id, cid))
+    return SuccessResponse(
+        data=await sess.previous_sets(
+            session_id,
+            exercise_id,
+            user.id,
+            ROLE_TRAINER in user.roles,
+            client_id,
+        )
+    )

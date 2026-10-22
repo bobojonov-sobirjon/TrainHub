@@ -10,3 +10,5 @@ def setup_logging() -> None:
         force=True,
     )
     logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)

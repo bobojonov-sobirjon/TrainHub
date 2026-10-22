@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from app.core.constants import SESSION_SORT
 from app.core.exceptions import AppError
 from app.db.connection import execute, fetch, fetchrow
@@ -6,8 +8,14 @@ from app.schemas.stage import SessionCreateIn, SetIn
 
 
 async def create_session(actor_id: int, is_trainer: bool, payload: SessionCreateIn) -> dict:
-    trainer_id = actor_id if is_trainer else None
-    lead = payload.client_ids[0] if payload.client_ids else (None if is_trainer else actor_id)
+    if is_trainer:
+        trainer_id = actor_id
+        lead = payload.client_ids[0] if payload.client_ids else None
+        clients = payload.client_ids
+    else:
+        trainer_id = None
+        lead = actor_id
+        clients = [actor_id]
     async with transaction() as conn:
         row = await conn.fetchrow(
             """
@@ -23,7 +31,6 @@ async def create_session(actor_id: int, is_trainer: bool, payload: SessionCreate
             payload.program_day_id,
             payload.calendar_event_id,
         )
-        clients = payload.client_ids or ([actor_id] if not is_trainer else [])
         for client_id in clients:
             await conn.execute(
                 "INSERT INTO workout_session_clients (session_id, client_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
@@ -44,7 +51,24 @@ async def get_session(session_id: int, actor_id: int, is_trainer: bool) -> dict:
     if row is None:
         raise AppError("SESSION_NOT_FOUND", "Тренировка не найдена", http_status=404)
     if is_trainer and row["trainer_id"] != actor_id:
-        raise AppError("FORBIDDEN", "Это не ваша тренировка", http_status=403)
+        linked = await fetchrow(
+            """
+            SELECT 1 FROM trainer_clients tc
+            WHERE tc.trainer_id = $1 AND tc.archived_at IS NULL
+              AND (
+                  tc.client_id = $2
+                  OR EXISTS (
+                      SELECT 1 FROM workout_session_clients c
+                      WHERE c.session_id = $3 AND c.client_id = tc.client_id
+                  )
+              )
+            """,
+            actor_id,
+            row["lead_client_id"],
+            session_id,
+        )
+        if linked is None:
+            raise AppError("FORBIDDEN", "Это не ваша тренировка", http_status=403)
     if not is_trainer:
         member = await fetchrow(
             """
@@ -156,27 +180,156 @@ async def complete_session(session_id: int, actor_id: int, is_trainer: bool) -> 
     return result
 
 
-async def previous_sets(session_id: int, exercise_id: int, client_id: int) -> list[dict]:
+async def previous_sets(
+    session_id: int,
+    exercise_id: int,
+    actor_id: int,
+    is_trainer: bool,
+    client_id: int | None = None,
+) -> list[dict]:
+    session = await get_session(session_id, actor_id, is_trainer)
+    target = actor_id if not is_trainer else (client_id or session.get("lead_client_id") or actor_id)
+    if is_trainer and target != actor_id:
+        linked = await fetchrow(
+            """
+            SELECT 1 FROM trainer_clients
+            WHERE trainer_id = $1 AND client_id = $2 AND archived_at IS NULL
+            UNION
+            SELECT 1 FROM workout_session_clients WHERE session_id = $3 AND client_id = $2
+            UNION
+            SELECT 1 FROM workout_sessions WHERE id = $3 AND lead_client_id = $2
+            """,
+            actor_id,
+            target,
+            session_id,
+        )
+        if linked is None:
+            raise AppError("FORBIDDEN", "Нет доступа к результатам клиента", http_status=403)
     rows = await fetch(
         """
-        SELECT ss.weight_kg, ss.reps, ss.set_index, ws.finished_at
-        FROM session_sets ss
-        JOIN session_exercises se ON se.id = ss.session_exercise_id
-        JOIN workout_sessions ws ON ws.id = se.session_id
-        WHERE se.exercise_id = $1
-          AND ws.status = 'completed'
-          AND ws.id <> $2
-          AND (ws.lead_client_id = $3 OR EXISTS (
-              SELECT 1 FROM workout_session_clients c WHERE c.session_id = ws.id AND c.client_id = $3
-          ))
-        ORDER BY ws.finished_at DESC, ss.set_index
-        LIMIT 20
+        WITH last AS (
+            SELECT ws.id
+            FROM workout_sessions ws
+            JOIN session_exercises se ON se.session_id = ws.id
+            WHERE se.exercise_id = $1
+              AND ws.status = 'completed'
+              AND ws.id <> $2
+              AND (
+                  ws.lead_client_id = $3
+                  OR EXISTS (
+                      SELECT 1 FROM workout_session_clients c
+                      WHERE c.session_id = ws.id AND c.client_id = $3
+                  )
+              )
+            ORDER BY ws.finished_at DESC NULLS LAST
+            LIMIT 1
+        )
+        SELECT ss.weight_kg, ss.reps, ss.set_index, ss.is_warmup, ws.finished_at
+        FROM last
+        JOIN workout_sessions ws ON ws.id = last.id
+        JOIN session_exercises se ON se.session_id = last.id AND se.exercise_id = $1
+        JOIN session_sets ss ON ss.session_exercise_id = se.id
+        ORDER BY ss.set_index, ss.id
         """,
         exercise_id,
         session_id,
-        client_id,
+        target,
     )
     return [dict(r) for r in rows]
+
+
+async def patch_set(session_id: int, set_id: int, actor_id: int, is_trainer: bool, payload: SetIn) -> dict:
+    await get_session(session_id, actor_id, is_trainer)
+    row = await fetchrow(
+        """
+        UPDATE session_sets ss
+        SET weight_kg = COALESCE($3, ss.weight_kg),
+            reps = COALESCE($4, ss.reps),
+            is_warmup = $5
+        FROM session_exercises se
+        WHERE ss.id = $1
+          AND se.id = ss.session_exercise_id
+          AND se.session_id = $2
+        RETURNING ss.id
+        """,
+        set_id,
+        session_id,
+        payload.weight_kg,
+        payload.reps,
+        payload.is_warmup,
+    )
+    if row is None:
+        raise AppError("NOT_FOUND", "Подход не найден", http_status=404)
+    return await get_session(session_id, actor_id, is_trainer)
+
+
+async def strength_progress(client_id: int) -> list[dict]:
+    last_rows = await fetch(
+        """
+        SELECT DISTINCT ON (se.exercise_id)
+            se.exercise_id,
+            e.name,
+            ss.weight_kg AS last_weight_kg,
+            ss.reps AS last_reps,
+            ws.finished_at AS last_session_at
+        FROM workout_sessions ws
+        JOIN session_exercises se ON se.session_id = ws.id
+        JOIN session_sets ss ON ss.session_exercise_id = se.id
+        JOIN exercises e ON e.id = se.exercise_id
+        WHERE ws.status = 'completed'
+          AND ss.is_warmup = FALSE
+          AND (
+              ws.lead_client_id = $1
+              OR EXISTS (
+                  SELECT 1 FROM workout_session_clients c
+                  WHERE c.session_id = ws.id AND c.client_id = $1
+              )
+          )
+        ORDER BY se.exercise_id, ws.finished_at DESC NULLS LAST, ss.set_index DESC, ss.id DESC
+        """,
+        client_id,
+    )
+    best_rows = await fetch(
+        """
+        SELECT
+            se.exercise_id,
+            MAX(ss.weight_kg) FILTER (WHERE ss.is_warmup = FALSE) AS best_weight_kg,
+            COUNT(DISTINCT ws.id) AS sessions_count
+        FROM workout_sessions ws
+        JOIN session_exercises se ON se.session_id = ws.id
+        JOIN session_sets ss ON ss.session_exercise_id = se.id
+        WHERE ws.status = 'completed'
+          AND (
+              ws.lead_client_id = $1
+              OR EXISTS (
+                  SELECT 1 FROM workout_session_clients c
+                  WHERE c.session_id = ws.id AND c.client_id = $1
+              )
+          )
+        GROUP BY se.exercise_id
+        """,
+        client_id,
+    )
+    best = {int(r["exercise_id"]): dict(r) for r in best_rows}
+    items = []
+    for row in last_rows:
+        extra = best.get(int(row["exercise_id"]), {})
+        items.append(
+            {
+                "exercise_id": row["exercise_id"],
+                "name": row["name"],
+                "last_weight_kg": row["last_weight_kg"],
+                "last_reps": row["last_reps"],
+                "last_session_at": row["last_session_at"],
+                "best_weight_kg": extra.get("best_weight_kg"),
+                "sessions_count": int(extra.get("sessions_count") or 0),
+            }
+        )
+    items.sort(
+        key=lambda item: item["last_session_at"] or datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    )
+    return items
 
 
 async def client_sessions(

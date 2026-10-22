@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.admin.router import router as admin_router
 from app.api.app.router import router as app_router
 from app.api.health import router as health_router
+from app.api.pay import router as pay_router
 from app.core.config import settings
 from app.core.exceptions import (
     AppError,
@@ -108,6 +109,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RequestValidationError, validation_error_handler)
 
     app.include_router(health_router)
+    app.include_router(pay_router)
     app.include_router(app_router)
     app.include_router(admin_router)
     ensure_media_dir()

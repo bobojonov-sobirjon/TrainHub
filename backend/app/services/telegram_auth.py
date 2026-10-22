@@ -529,6 +529,13 @@ async def _poll_updates() -> None:
                     f"https://api.telegram.org/bot{token}/getUpdates",
                     params={"timeout": 25, "offset": offset},
                 )
+                if response.status_code in {401, 403}:
+                    logger.warning("Telegram bot token rejected (%s); polling stopped", response.status_code)
+                    return
+                if response.status_code >= 400:
+                    logger.warning("Telegram polling HTTP %s", response.status_code)
+                    await asyncio.sleep(15)
+                    continue
                 for update in response.json().get("result") or []:
                     offset = max(offset, int(update["update_id"]) + 1)
                     try:
@@ -539,7 +546,7 @@ async def _poll_updates() -> None:
                 raise
             except Exception:
                 logger.warning("Telegram polling failed")
-                await asyncio.sleep(3)
+                await asyncio.sleep(15)
 
 
 async def start_telegram_listener() -> asyncio.Task | None:
@@ -551,7 +558,11 @@ async def start_telegram_listener() -> asyncio.Task | None:
         return None
     try:
         async with httpx.AsyncClient(timeout=8) as client:
+            me = await client.get(f"https://api.telegram.org/bot{token}/getMe")
+            if me.status_code in {401, 403}:
+                logger.warning("Telegram bot token invalid; listener not started")
+                return None
             await client.post(f"https://api.telegram.org/bot{token}/deleteWebhook")
     except Exception:
-        logger.warning("Failed to delete Telegram webhook before polling")
+        logger.warning("Failed to prepare Telegram polling")
     return asyncio.create_task(_poll_updates())

@@ -8,6 +8,7 @@ from app.schemas.common import SuccessResponse, UserPublic
 from app.schemas.pagination import Page, page_args
 from app.schemas.stage import ClientAddIn, ClientManualIn, ClientNoteIn, ClientPatchIn, ClientSearchIn, MeasurementIn
 from app.services import clients as svc
+from app.services import sessions as sess
 
 router = APIRouter(prefix="/trainer/clients")
 
@@ -113,6 +114,19 @@ async def list_notes(link_id: int, user: Annotated[UserPublic, Depends(require_t
 )
 async def client_stats(link_id: int, user: Annotated[UserPublic, Depends(require_trainer)]) -> SuccessResponse[dict]:
     return SuccessResponse(data=await svc.client_stats(user.id, link_id))
+
+
+@router.get(
+    "/{link_id}/strength-progress",
+    tags=["Coach - Clients"],
+    summary="Прогресс клиента по упражнениям",
+    description="Последний и лучший вес, повторения. Видно, что клиент делал в прошлый раз — с тренером или сам.",
+)
+async def client_strength_progress(
+    link_id: int, user: Annotated[UserPublic, Depends(require_trainer)]
+) -> SuccessResponse[list]:
+    card = await svc.get_client(user.id, link_id)
+    return SuccessResponse(data=await sess.strength_progress(card["client_id"]))
 
 
 @router.get(

@@ -4,6 +4,7 @@ from app.core.exceptions import AppError
 from app.db.connection import execute, fetch, fetchrow
 from app.db.transactions import transaction
 from app.schemas.stage import MeasurementIn, NoteIn, NotificationPrefsIn
+from app.services.sessions import strength_progress
 from app.services.storage import save_bytes
 
 
@@ -135,6 +136,15 @@ async def home(user_id: int) -> dict:
         last_session["trainer_name"] = " ".join(
             part for part in [last_session.pop("trainer_first", None), last_session.pop("trainer_last", None)] if part
         ) or None
+    linked = await fetchrow(
+        """
+        SELECT 1 FROM trainer_clients
+        WHERE client_id = $1 AND archived_at IS NULL
+        LIMIT 1
+        """,
+        user_id,
+    )
+    strength = await strength_progress(user_id)
     return {
         "weight_kg": current_w,
         "body_fat_pct": last_m["body_fat_pct"] if last_m else None,
@@ -148,6 +158,9 @@ async def home(user_id: int) -> dict:
         "attendance_30d": [dict(r) for r in attendance],
         "last_session": last_session,
         "trainer_notes": notes[:5],
+        "has_trainer": linked is not None,
+        "can_train_solo": True,
+        "strength_progress": strength[:8],
     }
 
 

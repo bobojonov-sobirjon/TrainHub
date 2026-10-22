@@ -46,7 +46,12 @@ async def list_exercises(q: str | None, equipment: str | None, muscle: str | Non
         """,
         *args,
     )
-    return [_exercise_out(r) for r in rows]
+    items = []
+    for r in rows:
+        item = _exercise_out(r)
+        item["has_video"] = bool(item.get("video_url"))
+        items.append(item)
+    return items
 
 
 async def get_exercise(exercise_id: int) -> dict:
@@ -56,7 +61,9 @@ async def get_exercise(exercise_id: int) -> dict:
     )
     if row is None:
         raise AppError("EXERCISE_NOT_FOUND", "Упражнение не найдено", http_status=404)
-    return _exercise_out(row)
+    data = _exercise_out(row)
+    data["has_video"] = bool(data.get("video_url"))
+    return data
 
 
 async def create_exercise(owner_id: int | None, payload: ExerciseCreateIn, *, is_public: bool = False) -> dict:
@@ -219,7 +226,10 @@ async def get_program(program_id: int, user_id: int | None) -> dict:
     for day in days:
         exercises = await fetch(
             """
-            SELECT pde.id, pde.exercise_id, pde.sort_order, pde.sets, pde.reps_min, pde.reps_max, pde.note, e.name
+            SELECT
+                pde.id, pde.exercise_id, pde.sort_order, pde.sets, pde.reps_min, pde.reps_max, pde.note,
+                e.name, e.photo_url, e.photo_urls, e.video_url, e.equipment,
+                e.primary_muscle, e.secondary_muscles, e.exercise_type
             FROM program_day_exercises pde
             JOIN exercises e ON e.id = pde.exercise_id
             WHERE pde.program_day_id = $1
@@ -228,7 +238,11 @@ async def get_program(program_id: int, user_id: int | None) -> dict:
             day["id"],
         )
         item = dict(day)
-        item["exercises"] = [dict(e) for e in exercises]
+        item["exercises"] = []
+        for ex in exercises:
+            row = _exercise_out(ex)
+            row["has_video"] = bool(row.get("video_url"))
+            item["exercises"].append(row)
         day_items.append(item)
     has_pro = False
     if user_id and data.get("is_pro"):

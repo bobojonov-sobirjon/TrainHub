@@ -7,6 +7,8 @@
 | **Coach** (роль `trainer`) | §5 — экраны C1–C22 |
 | **Client** (роль `client`) | §6 — экраны L1–L16 |
 | Общее | JWT, `/me`, словари, уведомления, billing, FAQ |
+| **Оплата PRO** | [frontend-robokassa.md](frontend-robokassa.md) — WebView, checkout, polling |
+| **Программы и видео** | [frontend-program-videos.md](frontend-program-videos.md) — `video_url` в карточке программы |
 
 Swagger: http://51.20.92.246:8005/docs  
 Теги: `Coach - …`, `Client`, `Shared - …`.
@@ -330,7 +332,7 @@ Bearer. `UserPublic`: `id`, `public_id`, `email`, `phone`, `first_name`, `last_n
 |--------|-----|------|
 | GET | `/plans?audience=…` | |
 | GET | `/me/subscription?audience=…` | |
-| POST | `/me/subscription/checkout` | `{ "plan_id": 1 }` mock |
+| POST | `/me/subscription/checkout` | `{ "plan_id": 1 }` → `payment_url`, `inv_id`, `status=pending`. Открыть `payment_url` (Robokassa). PRO не сразу: ждать Result URL. |
 | PATCH | `/me/subscription` | `plan_id` optional, `auto_renew` optional |
 | POST | `/me/subscription/cancel` | нет — до конца периода |
 | POST | `/me/subscription/resume` | нет |
@@ -341,7 +343,13 @@ Bearer. `UserPublic`: `id`, `public_id`, `email`, `phone`, `first_name`, `last_n
 | POST | `/me/payment-methods` | `brand` default `card`; `last4` 4 цифры; `is_default` default true |
 | DELETE | `/me/payment-methods/{id}` | |
 
-План: `id`, `audience`, `code`, `period` (`month`\|`year`), `price_amount`, `currency`, `discount_pct`.
+План: `id`, `audience`, `code`, `period` (`month`\|`year`), `price_amount`, `currency`, `discount_pct`.  
+Цены PRO: **999 ₽ / месяц**, **8990 ₽ / год**.
+
+Checkout: `payment_id`, `inv_id`, `payment_url`, `provider` (`robokassa`\|`mock`), `status`, `is_test`, `amount`, `currency`, `plan_id`.  
+Приложение открывает `payment_url` (WebView / браузер). Страницы `/pay/success` и `/pay/fail` — только UX. PRO включает backend после Result URL Robokassa.
+
+Пошагово для мобилки: **[docs/frontend-robokassa.md](frontend-robokassa.md)**.
 
 ### FAQ / Support / Legal
 
@@ -466,8 +474,11 @@ Query: `date_from` datetime optional, `date_to` datetime optional, `week` dateti
 | GET | `/sessions/{session_id}` | |
 | POST | `/sessions/{session_id}/exercises` | `exercise_id` int required; `rest_sec` int optional |
 | POST | `/sessions/{session_id}/exercises/{se_id}/sets` | `weight_kg` decimal optional; `reps` int optional; `is_warmup` bool default false |
-| GET | `/sessions/{session_id}/previous/{exercise_id}` | query `client_id` optional |
+| GET | `/sessions/{session_id}/previous/{exercise_id}` | query `client_id` optional (только Coach, свой ученик) |
+| PATCH | `/sessions/{session_id}/sets/{set_id}` | `weight_kg`, `reps`, `is_warmup` |
 | POST | `/sessions/{session_id}/complete` | нет |
+
+Client может начать тренировку **без тренера**: `POST /sessions` без `client_ids`. `trainer_id` в ответе будет `null`. Coach видит и свои сессии с клиентом, и самостоятельные тренировки ученика.
 
 ### C4. Отчёт
 
@@ -543,7 +554,8 @@ POST `/trainer/clients/manual`
 | GET | `.../{link_id}/measurements` | |
 | POST | `.../{link_id}/measurements` | MeasurementIn |
 | GET | `.../{link_id}/measurements/chart` | `metric`, `from`, `to` |
-| GET | `.../{link_id}/stats` | |
+| GET | `.../{link_id}/stats` | + `strength_progress[]` (последний/лучший вес) |
+| GET | `.../{link_id}/strength-progress` | прогресс по упражнениям |
 | GET | `.../{link_id}/sessions` | `kind`, `page` |
 | GET | `.../{link_id}/notes` | |
 | POST | `.../{link_id}/notes` | `{ "text": "…" }` |
@@ -577,7 +589,7 @@ GET `/programs`
 
 `data.total` → «Показать N результатов».
 
-- GET `/programs/{id}` — если `is_pro` и нет подписки: дни `locked=true`
+- GET `/programs/{id}` — дни и упражнения; у упражнения `video_url`, `has_video`. Если `is_pro` и нет подписки: дни `locked=true`, `exercises=[]`. Видео: **[frontend-program-videos.md](frontend-program-videos.md)**.
 - POST / DELETE `/programs/{id}/save`
 - POST `/programs/{id}/duplicate`
 - GET `/programs/{id}/share` → `{ program_id, share_token }`
@@ -737,6 +749,9 @@ POST `/auth/change-password` `{ "old_password", "new_password" }` → 204.
 `trainer_notes` в home — последние 5. Полный список: GET `/client/trainer-notes`.  
 Цель веса: PATCH `/me` `{ "weight_goal_kg": 62 }`.
 
+Тренер не обязателен: `can_train_solo: true`. `has_trainer` — есть ли связь с Coach.  
+`strength_progress[]` — последний и лучший вес по упражнениям (свои тренировки). Полный список: GET `/client/strength-progress`.
+
 ### L2. Тренировки (история)
 
 GET `/client/sessions`
@@ -779,14 +794,20 @@ GET `/client/sessions`
 - GET `/sessions/{session_id}` — тот же объект (Shared)
 - GET `/sessions/{session_id}/previous/{exercise_id}`
 
-Если клиент сам ведёт тренировку:
+Клиент занимается **сам, без тренера** — те же API, что у Coach:
 
 | Method | URL | Body |
 |--------|-----|------|
-| POST | `/sessions` | `source` default `new`; `kinds[]`; `program_day_id` optional |
+| POST | `/sessions` | `source` default `new`; `kinds[]`; `program_day_id` optional. `client_ids` не передавать |
+| GET | `/exercises` | каталог, чтобы выбрать упражнения |
 | POST | `/sessions/{id}/exercises` | `exercise_id`, `rest_sec` optional |
 | POST | `/sessions/{id}/exercises/{se_id}/sets` | `weight_kg`, `reps`, `is_warmup` |
+| GET | `/sessions/{id}/previous/{exercise_id}` | прошлый вес и повторения этого упражнения |
+| PATCH | `/sessions/{id}/sets/{set_id}` | правка подхода |
 | POST | `/sessions/{id}/complete` | |
+| GET | `/client/strength-progress` | прогресс: last/best вес |
+
+`GET /sessions/{id}/previous/{exercise_id}` возвращает подходы **последней завершённой** тренировки по этому упражнению (`weight_kg`, `reps`, `set_index`, `is_warmup`, `finished_at`).
 
 ### L4–L5. Замеры
 

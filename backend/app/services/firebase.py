@@ -10,13 +10,24 @@ _initialized = False
 
 
 def _normalize_private_key(raw: str) -> str:
-    key = raw.strip().strip('"').strip("'").replace("\\n", "\n")
-    key = key.replace("----END PRIVATE KEY-----", "-----END PRIVATE KEY-----")
-    key = key.replace("----BEGIN PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----")
+    import re
+
+    key = raw.strip().lstrip("\ufeff").strip().strip('"').strip("'")
+    key = key.replace("\r\n", "\n").replace("\r", "\n")
+    key = key.replace("\\n", "\n")
+    key = re.sub(r"-{3,}BEGIN PRIVATE KEY-{3,}", "-----BEGIN PRIVATE KEY-----", key)
+    key = re.sub(r"-{3,}END PRIVATE KEY-{3,}", "-----END PRIVATE KEY-----", key)
+    if "-----BEGIN PRIVATE KEY-----" in key and "\n" not in key:
+        key = key.replace("-----BEGIN PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----\n")
+        key = key.replace("-----END PRIVATE KEY-----", "\n-----END PRIVATE KEY-----")
+    if key and not key.endswith("\n"):
+        key += "\n"
     return key
 
 
 def is_configured() -> bool:
+    if settings.firebase_credentials_file.strip():
+        return True
     return bool(settings.firebase_project_id.strip() and settings.firebase_private_key.strip())
 
 
@@ -27,28 +38,32 @@ def init_firebase() -> bool:
     if not is_configured():
         logger.warning("Firebase is not configured — social verify and FCM are off")
         return False
-    import firebase_admin
-    from firebase_admin import credentials
-
-    if firebase_admin._apps:
-        _initialized = True
-        return True
-    cred = credentials.Certificate(
-        {
-            "type": settings.firebase_type or "service_account",
-            "project_id": settings.firebase_project_id,
-            "private_key_id": settings.firebase_private_key_id,
-            "private_key": _normalize_private_key(settings.firebase_private_key),
-            "client_email": settings.firebase_client_email,
-            "client_id": settings.firebase_client_id,
-            "auth_uri": settings.firebase_auth_uri,
-            "token_uri": settings.firebase_token_uri,
-            "auth_provider_x509_cert_url": settings.firebase_auth_provider_x509_cert_url,
-            "client_x509_cert_url": settings.firebase_client_x509_cert_url,
-            "universe_domain": settings.firebase_universe_domain,
-        }
-    )
     try:
+        import firebase_admin
+        from firebase_admin import credentials
+
+        if firebase_admin._apps:
+            _initialized = True
+            return True
+        cred_file = settings.firebase_credentials_file.strip()
+        if cred_file:
+            cred = credentials.Certificate(cred_file)
+        else:
+            cred = credentials.Certificate(
+                {
+                    "type": settings.firebase_type or "service_account",
+                    "project_id": settings.firebase_project_id,
+                    "private_key_id": settings.firebase_private_key_id,
+                    "private_key": _normalize_private_key(settings.firebase_private_key),
+                    "client_email": settings.firebase_client_email,
+                    "client_id": settings.firebase_client_id,
+                    "auth_uri": settings.firebase_auth_uri,
+                    "token_uri": settings.firebase_token_uri,
+                    "auth_provider_x509_cert_url": settings.firebase_auth_provider_x509_cert_url,
+                    "client_x509_cert_url": settings.firebase_client_x509_cert_url,
+                    "universe_domain": settings.firebase_universe_domain,
+                }
+            )
         firebase_admin.initialize_app(cred)
     except Exception as exc:
         logger.exception("Firebase Admin init failed: %s", exc)

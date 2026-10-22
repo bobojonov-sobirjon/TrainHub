@@ -10,6 +10,7 @@ from app.db.sql_loader import sql
 from app.db.transactions import transaction
 from app.schemas.stage import ClientManualIn, MeasurementIn
 from app.services.notify import create_notification
+from app.services.sessions import strength_progress
 
 
 async def _has_trainer_pro(user_id: int) -> bool:
@@ -526,6 +527,7 @@ async def client_stats(trainer_id: int, link_id: int) -> dict:
         "measurements_count": int(m_count["total"]),
         "notes_count": int(notes_count["total"]),
         "last_measurement": dict(last_m) if last_m else None,
+        "strength_progress": await strength_progress(client_id),
     }
 
 

@@ -64,6 +64,19 @@ async def progress(user: Annotated[UserPublic, Depends(get_app_user)]) -> Succes
     return SuccessResponse(data=await cab.progress(user.id))
 
 
+@router.get(
+    "/client/strength-progress",
+    tags=["Client"],
+    summary="Прогресс по упражнениям",
+    description=(
+        "Последний вес и повторения, а также лучший вес по каждому упражнению. "
+        "Работает и без тренера: учитываются свои тренировки."
+    ),
+)
+async def strength(user: Annotated[UserPublic, Depends(get_app_user)]) -> SuccessResponse[list]:
+    return SuccessResponse(data=await sess.strength_progress(user.id))
+
+
 @router.get("/client/photo-progress", tags=["Client"], summary="Фотопрогресс")
 async def photos(user: Annotated[UserPublic, Depends(get_app_user)]) -> SuccessResponse[list]:
     return SuccessResponse(data=await cab.list_photo_sets(user.id))

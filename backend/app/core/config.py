@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     firebase_auth_provider_x509_cert_url: str = "https://www.googleapis.com/oauth2/v1/certs"
     firebase_client_x509_cert_url: str = ""
     firebase_universe_domain: str = "googleapis.com"
+    firebase_credentials_file: str = ""
     telegram_bot_token: str = ""
     telegram_bot_username: str = ""
     telegram_webhook_secret: str = ""
@@ -62,6 +63,14 @@ class Settings(BaseSettings):
     sms_eskiz_email: str = ""
     sms_eskiz_password: str = ""
     sms_eskiz_from: str = "4546"
+
+    robokassa_merchant_login: str = ""
+    robokassa_password1: str = ""
+    robokassa_password2: str = ""
+    robokassa_test_password1: str = ""
+    robokassa_test_password2: str = ""
+    robokassa_is_test: bool = True
+    robokassa_hash_alg: str = "md5"
 
     @property
     def google_audiences(self) -> list[str]:

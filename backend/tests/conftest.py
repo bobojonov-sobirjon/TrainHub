@@ -8,6 +8,12 @@ os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("APP_DEBUG", "true")
 os.environ.setdefault("JWT_SECRET", "test-secret-not-for-production")
 os.environ.setdefault("TELEGRAM_BOT_USERNAME", "trainhub_bot")
+os.environ["ROBOKASSA_MERCHANT_LOGIN"] = ""
+os.environ["ROBOKASSA_PASSWORD1"] = ""
+os.environ["ROBOKASSA_PASSWORD2"] = ""
+os.environ["ROBOKASSA_TEST_PASSWORD1"] = ""
+os.environ["ROBOKASSA_TEST_PASSWORD2"] = ""
+os.environ["ROBOKASSA_IS_TEST"] = "true"
 
 from app.db.migrate import apply_migrations
 from app.db.pool import close_pool, create_pool
