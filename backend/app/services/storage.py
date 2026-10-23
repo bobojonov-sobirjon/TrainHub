@@ -69,8 +69,10 @@ async def save_bytes(
     folder: str,
     filename: str,
     allowed: set[str] | None = None,
+    max_bytes: int | None = None,
 ) -> str:
-    if len(data) > MAX_BYTES:
+    limit = max_bytes if max_bytes is not None else MAX_BYTES
+    if len(data) > limit:
         raise AppError("FILE_TOO_LARGE", "Файл слишком большой", http_status=400)
     if settings.storage_backend != "local":
         raise AppError("STORAGE_NOT_READY", "Удалённое хранилище не настроено", http_status=501)

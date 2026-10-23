@@ -12,6 +12,7 @@ from app.api.app import (
     me,
     notifications,
     trainer,
+    videos,
 )
 
 router = APIRouter(prefix="/api/v1/app")
@@ -26,3 +27,4 @@ router.include_router(cabinet.router)
 router.include_router(billing.router)
 router.include_router(content.router)
 router.include_router(notifications.router)
+router.include_router(videos.router)

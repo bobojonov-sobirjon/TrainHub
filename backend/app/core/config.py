@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     storage_backend: str = "local"
     media_dir: str = "media"
     public_base_url: str = "http://127.0.0.1:8009"
+    video_lesson_max_bytes: int = 80 * 1024 * 1024
 
     s3_endpoint: str = ""
     s3_access_key: str = ""

@@ -85,7 +85,8 @@ GET /programs/{id}
 - `has_video === false` или `video_url == null` → текст «Видео недоступно», не битый iframe.
 - Play / pause / seek / fullscreen — нативный player (`<video src={video_url} controls />` или аналог).
 - Ошибка загрузки — retry / «не удалось загрузить».
-- Не строить отдельный раздел «Все видео» или «Курсы тренера».
+- Видео упражнения в программе — это `video_url` у упражнения, не библиотека уроков.
+- Библиотека видеоуроков (категории / темы / назначение): [frontend-video-lessons.md](frontend-video-lessons.md).
 
 ---
 

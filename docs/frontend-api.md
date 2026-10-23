@@ -9,6 +9,7 @@
 | Общее | JWT, `/me`, словари, уведомления, billing, FAQ |
 | **Оплата PRO** | [frontend-robokassa.md](frontend-robokassa.md) — WebView, checkout, polling |
 | **Программы и видео** | [frontend-program-videos.md](frontend-program-videos.md) — `video_url` в карточке программы |
+| **Видеоуроки** | [frontend-video-lessons.md](frontend-video-lessons.md) — категории → темы → ролики, назначение клиенту |
 
 Swagger: http://51.20.92.246:8005/docs  
 Теги: `Coach - …`, `Client`, `Shared - …`.

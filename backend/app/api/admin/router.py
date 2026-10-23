@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.admin import auth, billing, clients, content, dashboard, dictionaries, me, programs, users
+from app.api.admin import auth, billing, clients, content, dashboard, dictionaries, me, programs, users, videos
 
 router = APIRouter(prefix="/api/v1/admin")
 router.include_router(auth.router)
@@ -12,3 +12,4 @@ router.include_router(clients.router)
 router.include_router(programs.router)
 router.include_router(billing.router)
 router.include_router(content.router)
+router.include_router(videos.router)
