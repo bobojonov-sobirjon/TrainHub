@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+from pathlib import Path
 
 from app.core.config import settings
 from app.core.exceptions import AppError
@@ -7,6 +9,7 @@ from app.core.exceptions import AppError
 logger = logging.getLogger(__name__)
 
 _initialized = False
+BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
 def _normalize_private_key(raw: str) -> str:
@@ -25,8 +28,50 @@ def _normalize_private_key(raw: str) -> str:
     return key
 
 
+def _credentials_file() -> Path | None:
+    raw = settings.firebase_credentials_file.strip()
+    candidates: list[Path] = []
+    if raw:
+        path = Path(raw)
+        candidates.append(path if path.is_absolute() else BACKEND_DIR / path)
+    candidates.append(BACKEND_DIR / "firebase-sa.json")
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved in seen or not resolved.is_file():
+            continue
+        seen.add(resolved)
+        return resolved
+    return None
+
+
+def _info_from_file(path: Path) -> dict:
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict):
+        raise ValueError("Firebase credentials file is not a JSON object")
+    if data.get("private_key"):
+        data["private_key"] = _normalize_private_key(str(data["private_key"]))
+    return data
+
+
+def _info_from_env() -> dict:
+    return {
+        "type": settings.firebase_type or "service_account",
+        "project_id": settings.firebase_project_id,
+        "private_key_id": settings.firebase_private_key_id,
+        "private_key": _normalize_private_key(settings.firebase_private_key),
+        "client_email": settings.firebase_client_email,
+        "client_id": settings.firebase_client_id,
+        "auth_uri": settings.firebase_auth_uri,
+        "token_uri": settings.firebase_token_uri,
+        "auth_provider_x509_cert_url": settings.firebase_auth_provider_x509_cert_url,
+        "client_x509_cert_url": settings.firebase_client_x509_cert_url,
+        "universe_domain": settings.firebase_universe_domain,
+    }
+
+
 def is_configured() -> bool:
-    if settings.firebase_credentials_file.strip():
+    if _credentials_file() is not None:
         return True
     return bool(settings.firebase_project_id.strip() and settings.firebase_private_key.strip())
 
@@ -45,31 +90,16 @@ def init_firebase() -> bool:
         if firebase_admin._apps:
             _initialized = True
             return True
-        cred_file = settings.firebase_credentials_file.strip()
-        if cred_file:
-            cred = credentials.Certificate(cred_file)
-        else:
-            cred = credentials.Certificate(
-                {
-                    "type": settings.firebase_type or "service_account",
-                    "project_id": settings.firebase_project_id,
-                    "private_key_id": settings.firebase_private_key_id,
-                    "private_key": _normalize_private_key(settings.firebase_private_key),
-                    "client_email": settings.firebase_client_email,
-                    "client_id": settings.firebase_client_id,
-                    "auth_uri": settings.firebase_auth_uri,
-                    "token_uri": settings.firebase_token_uri,
-                    "auth_provider_x509_cert_url": settings.firebase_auth_provider_x509_cert_url,
-                    "client_x509_cert_url": settings.firebase_client_x509_cert_url,
-                    "universe_domain": settings.firebase_universe_domain,
-                }
-            )
+        cred_file = _credentials_file()
+        info = _info_from_file(cred_file) if cred_file else _info_from_env()
+        cred = credentials.Certificate(info)
         firebase_admin.initialize_app(cred)
+        project = info.get("project_id") or settings.firebase_project_id
     except Exception as exc:
         logger.exception("Firebase Admin init failed: %s", exc)
         return False
     _initialized = True
-    logger.info("Firebase Admin initialized for project %s", settings.firebase_project_id)
+    logger.info("Firebase Admin initialized for project %s", project)
     return True
 
 
