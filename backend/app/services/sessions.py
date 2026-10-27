@@ -21,13 +21,25 @@ async def _touch_activity(session_id: int) -> None:
     )
 
 
+def _active_duration_sql(alias: str = "") -> str:
+    """Wall time minus completed pauses and the current open pause (if any)."""
+    p = f"{alias}." if alias else ""
+    return (
+        f"GREATEST(0, EXTRACT(EPOCH FROM (COALESCE({p}finished_at, NOW()) - COALESCE({p}started_at, {p}created_at)))::INT"
+        f" - COALESCE({p}pause_sec, 0)"
+        f" - CASE WHEN {p}paused_at IS NOT NULL"
+        f" THEN EXTRACT(EPOCH FROM (COALESCE({p}finished_at, NOW()) - {p}paused_at))::INT ELSE 0 END)"
+    )
+
+
 async def abandon_session(session_id: int, *, reason: str = "inactivity") -> dict | None:
     row = await fetchrow(
-        """
+        f"""
         UPDATE workout_sessions
         SET status = 'abandoned',
             finished_at = NOW(),
-            duration_sec = EXTRACT(EPOCH FROM (NOW() - COALESCE(started_at, created_at)))::INT,
+            paused_at = NULL,
+            duration_sec = {_active_duration_sql()},
             notes = CASE
                 WHEN notes IS NULL OR notes = '' THEN $2
                 ELSE notes || E'\\n' || $2
@@ -48,14 +60,57 @@ async def abandon_session(session_id: int, *, reason: str = "inactivity") -> dic
     return dict(row)
 
 
+async def pause_session(session_id: int, actor_id: int, is_trainer: bool) -> dict:
+    await get_session(session_id, actor_id, is_trainer)
+    row = await fetchrow(
+        """
+        UPDATE workout_sessions
+        SET paused_at = COALESCE(paused_at, NOW()),
+            last_activity_at = NOW()
+        WHERE id = $1 AND status = 'in_progress'
+        RETURNING id
+        """,
+        session_id,
+    )
+    if row is None:
+        raise AppError("SESSION_NOT_ACTIVE", "Тренировка не активна", http_status=409)
+    return await get_session(session_id, actor_id, is_trainer)
+
+
+async def resume_session(session_id: int, actor_id: int, is_trainer: bool) -> dict:
+    await get_session(session_id, actor_id, is_trainer)
+    row = await fetchrow(
+        """
+        UPDATE workout_sessions
+        SET pause_sec = COALESCE(pause_sec, 0)
+              + CASE
+                  WHEN paused_at IS NULL THEN 0
+                  ELSE GREATEST(0, EXTRACT(EPOCH FROM (NOW() - paused_at))::INT)
+                END,
+            paused_at = NULL,
+            last_activity_at = NOW()
+        WHERE id = $1 AND status = 'in_progress'
+        RETURNING id
+        """,
+        session_id,
+    )
+    if row is None:
+        raise AppError("SESSION_NOT_ACTIVE", "Тренировка не активна", http_status=409)
+    return await get_session(session_id, actor_id, is_trainer)
+
+
 async def abandon_stale_sessions(*, older_than: timedelta | None = None) -> int:
-    """Mark in_progress sessions with no activity as abandoned."""
+    """Mark in_progress sessions with no activity as abandoned.
+
+    Paused sessions are kept — user may resume later without the 1h abandon clock.
+    """
     cutoff = older_than or SESSION_INACTIVITY
     rows = await fetch(
         """
         SELECT id
         FROM workout_sessions
         WHERE status = 'in_progress'
+          AND paused_at IS NULL
           AND COALESCE(last_activity_at, started_at, created_at) < NOW() - $1::interval
         """,
         cutoff,
@@ -72,11 +127,12 @@ async def find_active_session_for_user(user_id: int) -> dict | None:
     await abandon_stale_sessions()
     row = await fetchrow(
         """
-        SELECT id
+        SELECT id, trainer_id
         FROM workout_sessions
         WHERE status = 'in_progress'
           AND (
-              lead_client_id = $1
+              trainer_id = $1
+              OR lead_client_id = $1
               OR EXISTS (
                   SELECT 1 FROM workout_session_clients c
                   WHERE c.session_id = workout_sessions.id AND c.client_id = $1
@@ -89,7 +145,8 @@ async def find_active_session_for_user(user_id: int) -> dict | None:
     )
     if row is None:
         return None
-    return await get_session(int(row["id"]), user_id, False)
+    is_trainer = row.get("trainer_id") == user_id
+    return await get_session(int(row["id"]), user_id, bool(is_trainer))
 
 
 async def create_session(actor_id: int, is_trainer: bool, payload: SessionCreateIn) -> dict:
@@ -102,8 +159,11 @@ async def create_session(actor_id: int, is_trainer: bool, payload: SessionCreate
         lead = actor_id
         clients = [actor_id]
 
-    # Block new workout if the participant still has an unfinished one.
-    owners = {lead} if lead else set()
+    # Block new workout if actor / participants still have an unfinished one
+    # (includes trainer solo sessions with no clients).
+    owners = {actor_id}
+    if lead is not None:
+        owners.add(lead)
     owners.update(clients or [])
     owners.discard(None)
     for owner_id in owners:
@@ -235,7 +295,7 @@ async def get_session(session_id: int, actor_id: int, is_trainer: bool) -> dict:
     row = await fetchrow("SELECT * FROM workout_sessions WHERE id = $1", session_id)
     if row is None:
         raise AppError("SESSION_NOT_FOUND", "Тренировка не найдена", http_status=404)
-    if row["status"] == "in_progress":
+    if row["status"] == "in_progress" and row.get("paused_at") is None:
         last = row.get("last_activity_at") or row.get("started_at") or row.get("created_at")
         if last is not None:
             last_utc = last if last.tzinfo is not None else last.replace(tzinfo=UTC)
@@ -465,11 +525,12 @@ async def complete_session(session_id: int, actor_id: int, is_trainer: bool) -> 
     total = len(session["exercises"])
     if session.get("status") != "completed":
         await execute(
-            """
+            f"""
             UPDATE workout_sessions
             SET status = 'completed',
                 finished_at = NOW(),
-                duration_sec = EXTRACT(EPOCH FROM (NOW() - COALESCE(started_at, created_at)))::INT
+                paused_at = NULL,
+                duration_sec = {_active_duration_sql()}
             WHERE id = $1 AND status <> 'completed'
             """,
             session_id,
