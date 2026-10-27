@@ -9,27 +9,32 @@ class AppError(Exception):
         code: str,
         message: str,
         http_status: int = status.HTTP_400_BAD_REQUEST,
+        details: dict | None = None,
     ) -> None:
         self.code = code
         self.message = message
         self.http_status = http_status
+        self.details = details or {}
         super().__init__(message)
 
 
-def error_body(code: str, message: str) -> dict:
+def error_body(code: str, message: str, details: dict | None = None) -> dict:
+    err: dict = {
+        "code": code,
+        "message": message,
+    }
+    if details:
+        err["details"] = details
     return {
         "success": False,
-        "error": {
-            "code": code,
-            "message": message,
-        },
+        "error": err,
     }
 
 
 async def app_error_handler(_request: Request, exc: AppError) -> JSONResponse:
     return JSONResponse(
         status_code=exc.http_status,
-        content=error_body(exc.code, exc.message),
+        content=error_body(exc.code, exc.message, exc.details or None),
     )
 
 

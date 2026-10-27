@@ -751,18 +751,59 @@ async def create_request(client_id: int, trainer_id: int) -> dict:
     return dict(row)
 
 
+async def list_my_requests(client_id: int, status: str | None = None) -> list[dict]:
+    args: list = [client_id]
+    where = ["cr.client_id = $1"]
+    if status:
+        args.append(status)
+        where.append(f"cr.status = ${len(args)}")
+    where_sql = " AND ".join(where)
+    rows = await fetch(
+        f"""
+        SELECT
+            cr.id, cr.status, cr.created_at, cr.trainer_id,
+            u.first_name AS trainer_first_name,
+            u.last_name AS trainer_last_name,
+            u.avatar_url AS trainer_avatar_url,
+            tp.specializations
+        FROM client_requests cr
+        JOIN users u ON u.id = cr.trainer_id
+        LEFT JOIN trainer_profiles tp ON tp.user_id = u.id
+        WHERE {where_sql}
+        ORDER BY cr.created_at DESC
+        LIMIT 50
+        """,
+        *args,
+    )
+    return [dict(r) for r in rows]
+
+
 async def _notify_new_request(trainer_id: int, client_id: int, request_id: int) -> None:
     client = await fetchrow(
         "SELECT first_name, last_name FROM users WHERE id = $1",
         client_id,
     )
+    trainer = await fetchrow(
+        "SELECT first_name, last_name FROM users WHERE id = $1",
+        trainer_id,
+    )
     name = f"{client['first_name']} {client['last_name']}".strip() if client else "Клиент"
+    trainer_name = (
+        f"{trainer['first_name']} {trainer['last_name']}".strip() if trainer else "Тренер"
+    )
     await create_notification(
         trainer_id,
         ntype="new_client_request",
         title="Новая заявка клиента",
         body=f"{name} отправил(а) заявку",
         payload={"request_id": request_id, "client_id": client_id},
+    )
+    await create_notification(
+        client_id,
+        ntype="request_sent",
+        title="Заявка отправлена",
+        body=f"Ожидайте ответа от {trainer_name}",
+        payload={"request_id": request_id, "trainer_id": trainer_id},
     )
 
 

@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class TrainerProfileIn(BaseModel):
@@ -196,7 +196,11 @@ class CalendarIn(BaseModel):
     )
     reminder: str = Field(default="none", description="Напоминание: none, 15m, 1h, 1d", examples=["1h"])
     repeat_weekly: bool = Field(default=False, description="Повторять каждую неделю", examples=[False])
-    status: str = Field(default="scheduled", description="Статус: scheduled, cancelled, done", examples=["scheduled"])
+    status: str = Field(
+        default="scheduled",
+        description="Статус: scheduled, in_progress, completed, cancelled, no_show, rest",
+        examples=["scheduled"],
+    )
 
 
 class SetIn(BaseModel):
@@ -358,8 +362,23 @@ class ProgramRejectIn(BaseModel):
 
 
 class AssignProgramIn(BaseModel):
-    link_id: int = Field(ge=1, description="ID связи trainer_clients")
+    link_id: int | None = Field(default=None, ge=1, description="Один клиент (совместимость)")
+    link_ids: list[int] | None = Field(default=None, min_length=1, description="Несколько клиентов сразу")
     note: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def require_links(self) -> "AssignProgramIn":
+        ids: list[int] = []
+        if self.link_ids:
+            ids.extend(self.link_ids)
+        if self.link_id is not None:
+            ids.append(self.link_id)
+        cleaned = [i for i in dict.fromkeys(ids) if i and i > 0]
+        if not cleaned:
+            raise ValueError("Укажите link_id или link_ids")
+        self.link_ids = cleaned
+        self.link_id = cleaned[0]
+        return self
 
 
 class NoteIn(BaseModel):
@@ -517,10 +536,17 @@ class TicketStatusIn(BaseModel):
 
 
 class ReviewIn(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"examples": [{"rating": "5.0", "text": "Отличный тренер"}]})
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [{"rating": "5.0", "text": "Отличный тренер", "is_anonymous": False}]}
+    )
 
     rating: Decimal = Field(description="Оценка от 1 до 5", examples=["5.0"], ge=1, le=5)
     text: str = Field(default="", max_length=1000, description="Текст отзыва", examples=["Отличный тренер"])
+    is_anonymous: bool = Field(
+        default=False,
+        description="True — имя скрыто (Анонимно), False — имя клиента видно",
+        examples=[False],
+    )
 
 
 class PaymentMethodIn(BaseModel):

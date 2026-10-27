@@ -291,7 +291,7 @@ async def attention_list(trainer_id: int) -> list[dict]:
 async def list_reviews(trainer_id: int) -> list[dict]:
     rows = await fetch(
         """
-        SELECT r.id, r.rating, r.text, r.created_at,
+        SELECT r.id, r.rating, r.text, r.created_at, r.is_anonymous,
                u.id AS client_id, u.first_name, u.last_name, u.avatar_url
         FROM trainer_reviews r
         JOIN users u ON u.id = r.client_id
@@ -300,7 +300,20 @@ async def list_reviews(trainer_id: int) -> list[dict]:
         """,
         trainer_id,
     )
-    return [dict(r) for r in rows]
+    out: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        if item.get("is_anonymous"):
+            item["client_id"] = None
+            item["first_name"] = "Анонимно"
+            item["last_name"] = ""
+            item["avatar_url"] = None
+            item["display_name"] = "Анонимно"
+        else:
+            name = f"{item.get('first_name') or ''} {item.get('last_name') or ''}".strip()
+            item["display_name"] = name or "Клиент"
+        out.append(item)
+    return out
 
 
 async def upsert_review(trainer_id: int, client_id: int, payload: ReviewIn) -> dict:
@@ -310,17 +323,33 @@ async def upsert_review(trainer_id: int, client_id: int, payload: ReviewIn) -> d
     )
     if trainer is None:
         raise AppError("TRAINER_NOT_FOUND", "Тренер не найден", http_status=404)
+    link = await fetchrow(
+        """
+        SELECT id FROM trainer_clients
+        WHERE trainer_id = $1 AND client_id = $2 AND status != 'archived'
+        """,
+        trainer_id,
+        client_id,
+    )
+    if link is None:
+        raise AppError(
+            "FORBIDDEN",
+            "Оставить отзыв может только клиент этого тренера",
+            http_status=403,
+        )
     await execute(
         """
-        INSERT INTO trainer_reviews (trainer_id, client_id, rating, text)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO trainer_reviews (trainer_id, client_id, rating, text, is_anonymous)
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (trainer_id, client_id)
-        DO UPDATE SET rating = EXCLUDED.rating, text = EXCLUDED.text, created_at = NOW()
+        DO UPDATE SET rating = EXCLUDED.rating, text = EXCLUDED.text,
+                      is_anonymous = EXCLUDED.is_anonymous, created_at = NOW()
         """,
         trainer_id,
         client_id,
         payload.rating,
         payload.text,
+        bool(payload.is_anonymous),
     )
     stats = await fetchrow(
         """
@@ -341,7 +370,10 @@ async def upsert_review(trainer_id: int, client_id: int, payload: ReviewIn) -> d
         stats["reviews_count"],
     )
     row = await fetchrow(
-        "SELECT id, rating, text, created_at FROM trainer_reviews WHERE trainer_id = $1 AND client_id = $2",
+        """
+        SELECT id, rating, text, is_anonymous, created_at
+        FROM trainer_reviews WHERE trainer_id = $1 AND client_id = $2
+        """,
         trainer_id,
         client_id,
     )

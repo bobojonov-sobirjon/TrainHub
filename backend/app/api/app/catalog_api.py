@@ -390,13 +390,15 @@ async def submit_program(
 @router.post(
     "/programs/{program_id}/assign",
     tags=["Coach - Programs"],
-    summary="Назначить курс клиенту",
+    summary="Назначить курс одному или нескольким клиентам",
 )
 async def assign_program(
     program_id: int, payload: AssignProgramIn, user: Annotated[UserPublic, Depends(require_trainer)]
-) -> SuccessResponse[dict]:
+) -> SuccessResponse[list]:
     return SuccessResponse(
-        data=await cat.assign_program_to_client(user.id, program_id, payload.link_id, payload.note)
+        data=await cat.assign_program_to_clients(
+            user.id, program_id, payload.link_ids or [payload.link_id], payload.note
+        )
     )
 
 
@@ -436,6 +438,33 @@ async def my_saved_programs(
 
 
 @router.get(
+    "/me/programs",
+    tags=["Client - Programs"],
+    summary="Мои свои тренировки (все статусы)",
+    description="Черновики и готовые комплексы текущего пользователя (`author_id=me`).",
+)
+async def my_own_programs(
+    user: Annotated[UserPublic, Depends(get_app_user)],
+    status: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> SuccessResponse[Page[dict]]:
+    page, page_size, offset = page_args(page, page_size)
+    items, total = await cat.list_programs(
+        level=None,
+        goal=None,
+        equipment=None,
+        source=None,
+        author_id=user.id,
+        page_size=page_size,
+        offset=offset,
+        published_only=False,
+        status=status,
+    )
+    return SuccessResponse(data=Page(items=items, total=total, page=page, page_size=page_size))
+
+
+@router.get(
     "/trainer/programs",
     tags=["Coach - Programs"],
     summary="Мои курсы (все статусы)",
@@ -467,13 +496,25 @@ async def my_programs(
     summary="Начать тренировку",
     description=(
         "Создаёт живую сессию. Coach передаёт `client_ids`. "
-        "Client начинает свою тренировку без тренера: `client_ids` игнорируется, `trainer_id` будет null."
+        "Client начинает свою тренировку без тренера: `client_ids` игнорируется, `trainer_id` будет null. "
+        "Если есть незавершённая тренировка (in_progress, активность < 1ч) — 409 ACTIVE_SESSION_EXISTS. "
+        "Сессии без активности 1ч+ помечаются abandoned."
     ),
 )
 async def create_session(
     payload: SessionCreateIn, user: Annotated[UserPublic, Depends(get_app_user)]
 ) -> SuccessResponse[dict]:
     return SuccessResponse(data=await sess.create_session(user.id, ROLE_TRAINER in user.roles, payload))
+
+
+@router.get(
+    "/me/active-session",
+    tags=["Shared - Sessions"],
+    summary="Активная незавершённая тренировка",
+    description="null если нет. Просроченные (>1ч без активности) автоматически abandoned.",
+)
+async def my_active_session(user: Annotated[UserPublic, Depends(get_app_user)]) -> SuccessResponse[dict | None]:
+    return SuccessResponse(data=await sess.find_active_session_for_user(user.id))
 
 
 @router.get("/sessions/{session_id}", tags=["Shared - Sessions"], summary="Карточка тренировки")

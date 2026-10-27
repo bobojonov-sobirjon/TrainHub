@@ -36,9 +36,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from app.services.telegram_auth import start_telegram_listener
 
     telegram_task = await start_telegram_listener()
+    from app.services.jobs import start_jobs, stop_jobs
+
+    jobs_task = await start_jobs()
     yield
+    await stop_jobs()
     if telegram_task:
         telegram_task.cancel()
+    if jobs_task and not jobs_task.done():
+        jobs_task.cancel()
     await close_redis()
     await close_pool()
 

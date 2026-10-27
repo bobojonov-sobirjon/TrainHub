@@ -1,10 +1,95 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.core.constants import SESSION_SORT
 from app.core.exceptions import AppError
 from app.db.connection import execute, fetch, fetchrow
 from app.db.transactions import transaction
 from app.schemas.stage import SessionCreateIn, SetIn
+
+# No taps / mutations for this long → session is abandoned (incomplete).
+SESSION_INACTIVITY = timedelta(hours=1)
+
+
+async def _touch_activity(session_id: int) -> None:
+    await execute(
+        """
+        UPDATE workout_sessions
+        SET last_activity_at = NOW()
+        WHERE id = $1 AND status = 'in_progress'
+        """,
+        session_id,
+    )
+
+
+async def abandon_session(session_id: int, *, reason: str = "inactivity") -> dict | None:
+    row = await fetchrow(
+        """
+        UPDATE workout_sessions
+        SET status = 'abandoned',
+            finished_at = NOW(),
+            duration_sec = EXTRACT(EPOCH FROM (NOW() - COALESCE(started_at, created_at)))::INT,
+            notes = CASE
+                WHEN notes IS NULL OR notes = '' THEN $2
+                ELSE notes || E'\\n' || $2
+            END
+        WHERE id = $1 AND status = 'in_progress'
+        RETURNING id, lead_client_id, calendar_event_id
+        """,
+        session_id,
+        f"abandoned:{reason}",
+    )
+    if row is None:
+        return None
+    if row.get("calendar_event_id"):
+        await execute(
+            "UPDATE calendar_events SET status = 'cancelled' WHERE id = $1 AND status = 'in_progress'",
+            row["calendar_event_id"],
+        )
+    return dict(row)
+
+
+async def abandon_stale_sessions(*, older_than: timedelta | None = None) -> int:
+    """Mark in_progress sessions with no activity as abandoned."""
+    cutoff = older_than or SESSION_INACTIVITY
+    rows = await fetch(
+        """
+        SELECT id
+        FROM workout_sessions
+        WHERE status = 'in_progress'
+          AND COALESCE(last_activity_at, started_at, created_at) < NOW() - $1::interval
+        """,
+        cutoff,
+    )
+    count = 0
+    for row in rows:
+        if await abandon_session(int(row["id"]), reason="inactivity_1h"):
+            count += 1
+    return count
+
+
+async def find_active_session_for_user(user_id: int) -> dict | None:
+    """Return active in_progress session for user, auto-abandoning stale ones."""
+    await abandon_stale_sessions()
+    row = await fetchrow(
+        """
+        SELECT id
+        FROM workout_sessions
+        WHERE status = 'in_progress'
+          AND (
+              lead_client_id = $1
+              OR EXISTS (
+                  SELECT 1 FROM workout_session_clients c
+                  WHERE c.session_id = workout_sessions.id AND c.client_id = $1
+              )
+          )
+        ORDER BY COALESCE(last_activity_at, started_at, created_at) DESC
+        LIMIT 1
+        """,
+        user_id,
+    )
+    if row is None:
+        return None
+    return await get_session(int(row["id"]), user_id, False)
 
 
 async def create_session(actor_id: int, is_trainer: bool, payload: SessionCreateIn) -> dict:
@@ -16,6 +101,20 @@ async def create_session(actor_id: int, is_trainer: bool, payload: SessionCreate
         trainer_id = None
         lead = actor_id
         clients = [actor_id]
+
+    # Block new workout if the participant still has an unfinished one.
+    owners = {lead} if lead else set()
+    owners.update(clients or [])
+    owners.discard(None)
+    for owner_id in owners:
+        active = await find_active_session_for_user(int(owner_id))
+        if active is not None:
+            raise AppError(
+                "ACTIVE_SESSION_EXISTS",
+                "Есть незавершённая тренировка — продолжите её или завершите",
+                http_status=409,
+                details={"session_id": active.get("id"), "status": active.get("status")},
+            )
 
     program_day_id = payload.program_day_id
     if program_day_id is not None:
@@ -71,8 +170,9 @@ async def create_session(actor_id: int, is_trainer: bool, payload: SessionCreate
         row = await conn.fetchrow(
             """
             INSERT INTO workout_sessions (
-                trainer_id, lead_client_id, source, kinds, program_day_id, calendar_event_id, status, started_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,'in_progress', NOW())
+                trainer_id, lead_client_id, source, kinds, program_day_id, calendar_event_id,
+                status, started_at, last_activity_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,'in_progress', NOW(), NOW())
             RETURNING id
             """,
             trainer_id,
@@ -135,6 +235,17 @@ async def get_session(session_id: int, actor_id: int, is_trainer: bool) -> dict:
     row = await fetchrow("SELECT * FROM workout_sessions WHERE id = $1", session_id)
     if row is None:
         raise AppError("SESSION_NOT_FOUND", "Тренировка не найдена", http_status=404)
+    if row["status"] == "in_progress":
+        last = row.get("last_activity_at") or row.get("started_at") or row.get("created_at")
+        if last is not None:
+            last_utc = last if last.tzinfo is not None else last.replace(tzinfo=UTC)
+            if datetime.now(UTC) - last_utc.astimezone(UTC) > SESSION_INACTIVITY:
+                await abandon_session(session_id, reason="inactivity_1h_on_open")
+                row = await fetchrow("SELECT * FROM workout_sessions WHERE id = $1", session_id)
+            else:
+                await _touch_activity(session_id)
+        else:
+            await _touch_activity(session_id)
     if is_trainer and row["trainer_id"] != actor_id:
         linked = await fetchrow(
             """
@@ -304,22 +415,47 @@ async def add_set(session_id: int, se_id: int, actor_id: int, is_trainer: bool, 
         )
         if existing is not None:
             return await get_session(session_id, actor_id, is_trainer)
-    await fetchrow(
+    # Fill next planned (empty) set first — avoids "#1 —" leftover while #2/#3 get values.
+    pending = await fetchrow(
         """
-        INSERT INTO session_sets (session_exercise_id, set_index, weight_kg, reps, is_warmup, completed_at, client_op_id)
-        VALUES (
-            $1,
-            COALESCE((SELECT MAX(set_index)+1 FROM session_sets WHERE session_exercise_id = $1), 1),
-            $2, $3, $4, NOW(), $5
-        )
-        RETURNING id
+        SELECT id FROM session_sets
+        WHERE session_exercise_id = $1 AND completed_at IS NULL
+        ORDER BY set_index, id
+        LIMIT 1
         """,
         se_id,
-        payload.weight_kg,
-        payload.reps,
-        payload.is_warmup,
-        client_op_id,
     )
+    if pending is not None:
+        await execute(
+            """
+            UPDATE session_sets
+            SET weight_kg = $2, reps = $3, is_warmup = $4, completed_at = NOW(), client_op_id = $5
+            WHERE id = $1
+            """,
+            pending["id"],
+            payload.weight_kg,
+            payload.reps,
+            payload.is_warmup,
+            client_op_id,
+        )
+    else:
+        await fetchrow(
+            """
+            INSERT INTO session_sets (session_exercise_id, set_index, weight_kg, reps, is_warmup, completed_at, client_op_id)
+            VALUES (
+                $1,
+                COALESCE((SELECT MAX(set_index)+1 FROM session_sets WHERE session_exercise_id = $1), 1),
+                $2, $3, $4, NOW(), $5
+            )
+            RETURNING id
+            """,
+            se_id,
+            payload.weight_kg,
+            payload.reps,
+            payload.is_warmup,
+            client_op_id,
+        )
+    await _touch_activity(session_id)
     return await get_session(session_id, actor_id, is_trainer)
 
 
@@ -450,6 +586,84 @@ async def patch_set(session_id: int, set_id: int, actor_id: int, is_trainer: boo
     if row is None:
         raise AppError("NOT_FOUND", "Подход не найден", http_status=404)
     return await get_session(session_id, actor_id, is_trainer)
+
+
+async def volume_progress(client_id: int, *, days: int = 30) -> dict:
+    """Daily tonnage (weight×reps) + per-exercise volume for the last N days."""
+    days = max(7, min(int(days or 30), 90))
+    daily = await fetch(
+        """
+        SELECT COALESCE(ws.finished_at, ws.started_at, ws.created_at)::date AS day,
+               COALESCE(SUM(ss.weight_kg * ss.reps) FILTER (WHERE ss.is_warmup = FALSE), 0) AS volume_kg
+        FROM workout_sessions ws
+        JOIN session_exercises se ON se.session_id = ws.id
+        JOIN session_sets ss ON ss.session_exercise_id = se.id
+        WHERE ws.status = 'completed'
+          AND COALESCE(ws.finished_at, ws.started_at, ws.created_at) >= CURRENT_DATE - ($2 * INTERVAL '1 day')
+          AND (
+              ws.lead_client_id = $1
+              OR EXISTS (
+                  SELECT 1 FROM workout_session_clients c
+                  WHERE c.session_id = ws.id AND c.client_id = $1
+              )
+          )
+        GROUP BY day
+        ORDER BY day
+        """,
+        client_id,
+        days,
+    )
+    by_exercise = await fetch(
+        """
+        SELECT e.id AS exercise_id,
+               e.name,
+               COALESCE(SUM(ss.weight_kg * ss.reps) FILTER (WHERE ss.is_warmup = FALSE), 0) AS volume_kg,
+               MAX(ss.weight_kg) FILTER (WHERE ss.is_warmup = FALSE) AS best_weight_kg,
+               COUNT(DISTINCT ws.id) AS sessions_count
+        FROM workout_sessions ws
+        JOIN session_exercises se ON se.session_id = ws.id
+        JOIN session_sets ss ON ss.session_exercise_id = se.id
+        JOIN exercises e ON e.id = se.exercise_id
+        WHERE ws.status = 'completed'
+          AND COALESCE(ws.finished_at, ws.started_at, ws.created_at) >= CURRENT_DATE - ($2 * INTERVAL '1 day')
+          AND (
+              ws.lead_client_id = $1
+              OR EXISTS (
+                  SELECT 1 FROM workout_session_clients c
+                  WHERE c.session_id = ws.id AND c.client_id = $1
+              )
+          )
+        GROUP BY e.id, e.name
+        HAVING COALESCE(SUM(ss.weight_kg * ss.reps) FILTER (WHERE ss.is_warmup = FALSE), 0) > 0
+        ORDER BY volume_kg DESC
+        LIMIT 12
+        """,
+        client_id,
+        days,
+    )
+    series = [
+        {
+            "date": row["day"].isoformat() if hasattr(row["day"], "isoformat") else str(row["day"]),
+            "volume_kg": float(row["volume_kg"] or 0),
+        }
+        for row in daily
+    ]
+    total = sum(item["volume_kg"] for item in series)
+    return {
+        "days": days,
+        "total_volume_kg": round(total, 1),
+        "series": series,
+        "by_exercise": [
+            {
+                "exercise_id": row["exercise_id"],
+                "name": row["name"],
+                "volume_kg": float(row["volume_kg"] or 0),
+                "best_weight_kg": float(row["best_weight_kg"]) if row["best_weight_kg"] is not None else None,
+                "sessions_count": int(row["sessions_count"] or 0),
+            }
+            for row in by_exercise
+        ],
+    }
 
 
 async def strength_progress(client_id: int) -> list[dict]:

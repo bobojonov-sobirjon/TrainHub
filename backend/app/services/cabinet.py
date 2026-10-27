@@ -8,9 +8,10 @@ from app.services.sessions import strength_progress
 from app.services.storage import IMAGE_EXTENSIONS, save_bytes
 
 _ATTENDANCE_PRIORITY = {
-    "completed": 3,
-    "present": 3,
-    "attended": 3,
+    "completed": 4,
+    "present": 4,
+    "attended": 4,
+    "rest": 3,
     "no_show": 2,
     "missed": 2,
     "cancelled": 2,
@@ -337,18 +338,55 @@ async def unread_count(user_id: int) -> dict:
     return {"unread_count": int(row["total"]) if row else 0}
 
 
+_PROGRESS_KEYS = (
+    "weight_kg",
+    "body_fat_pct",
+    "muscle_mass_kg",
+    "water_pct",
+    "chest_cm",
+    "back_cm",
+    "waist_cm",
+    "hips_cm",
+    "thigh_cm",
+    "calf_cm",
+    "neck_cm",
+    "shoulders_cm",
+    "arm_cm",
+    "arm_left_cm",
+    "arm_right_cm",
+    "forearm_cm",
+)
+
+
+def _merge_measurement_snapshot(rows: list) -> tuple[dict | None, dict | None]:
+    """Build current + previous from sparse single-field posts (latest / prior non-null per key)."""
+    if not rows:
+        return None, None
+    current: dict = {"recorded_at": rows[0].get("recorded_at")}
+    previous: dict = {}
+    for row in rows:
+        for key in _PROGRESS_KEYS:
+            value = row.get(key)
+            if value is None:
+                continue
+            if key not in current:
+                current[key] = value
+            elif key not in previous and value != current.get(key):
+                previous[key] = value
+    return current, (previous or None)
+
+
 async def progress(user_id: int) -> dict:
-    current = await fetchrow(
-        "SELECT * FROM body_measurements WHERE client_id = $1 ORDER BY recorded_at DESC LIMIT 1",
-        user_id,
-    )
-    prev = await fetchrow(
+    rows = await fetch(
         """
-        SELECT * FROM body_measurements WHERE client_id = $1
-        ORDER BY recorded_at DESC OFFSET 1 LIMIT 1
+        SELECT * FROM body_measurements
+        WHERE client_id = $1
+        ORDER BY recorded_at DESC
+        LIMIT 60
         """,
         user_id,
     )
+    current, prev = _merge_measurement_snapshot([dict(r) for r in rows])
     photos = await fetch(
         """
         SELECT s.id, s.taken_on,
@@ -361,8 +399,8 @@ async def progress(user_id: int) -> dict:
         user_id,
     )
     return {
-        "current": dict(current) if current else None,
-        "previous": dict(prev) if prev else None,
+        "current": current,
+        "previous": prev,
         "photo_sets": [dict(p) for p in photos],
     }
 

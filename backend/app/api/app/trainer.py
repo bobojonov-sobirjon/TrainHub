@@ -141,6 +141,19 @@ async def request_trainer(
 
 
 @router.get(
+    "/me/trainer-requests",
+    tags=["Client - Catalog"],
+    summary="Мои заявки к тренерам",
+    description="Статусы заявок клиента: pending / accepted / rejected.",
+)
+async def my_trainer_requests(
+    user: Annotated[UserPublic, Depends(require_client)],
+    status: str | None = None,
+) -> SuccessResponse[list]:
+    return SuccessResponse(data=await client_svc.list_my_requests(user.id, status))
+
+
+@router.get(
     "/trainer/requests",
     tags=["Coach - Clients"],
     summary="Заявки клиентов",

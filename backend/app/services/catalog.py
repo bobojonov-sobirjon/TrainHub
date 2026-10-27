@@ -11,6 +11,7 @@ from app.schemas.stage import (
     ProgramDayIn,
     ProgramWeekIn,
 )
+from app.services.notify import create_notification
 
 EXERCISE_COLS = """
     id, owner_id, name, photo_url, photo_urls, video_url, equipment, primary_muscle,
@@ -950,37 +951,64 @@ async def reject_program(admin_id: int, program_id: int, reason: str) -> dict:
 
 
 async def assign_program_to_client(trainer_id: int, program_id: int, link_id: int, note: str | None = None) -> dict:
-    prog = await fetchrow("SELECT id, author_id, status, source FROM programs WHERE id = $1", program_id)
+    rows = await assign_program_to_clients(trainer_id, program_id, [link_id], note)
+    return rows[0]
+
+
+async def assign_program_to_clients(
+    trainer_id: int, program_id: int, link_ids: list[int], note: str | None = None
+) -> list[dict]:
+    prog = await fetchrow(
+        "SELECT id, title, author_id, status, source FROM programs WHERE id = $1",
+        program_id,
+    )
     if prog is None:
         raise AppError("PROGRAM_NOT_FOUND", "Программа не найдена", http_status=404)
     if prog["status"] != "published" and prog["author_id"] != trainer_id:
         raise AppError("FORBIDDEN", "Можно назначить только опубликованный или свой курс", http_status=403)
-    link = await fetchrow(
-        """
-        SELECT id, client_id FROM trainer_clients
-        WHERE id = $1 AND trainer_id = $2 AND status != 'archived'
-        """,
-        link_id,
-        trainer_id,
-    )
-    if link is None:
-        raise AppError("CLIENT_NOT_FOUND", "Клиент не найден", http_status=404)
-    row = await fetchrow(
-        """
-        INSERT INTO client_program_assignments (program_id, trainer_id, client_id, link_id, note, status)
-        VALUES ($1, $2, $3, $4, $5, 'active')
-        ON CONFLICT (program_id, client_id) DO UPDATE
-          SET status = 'active', revoked_at = NULL, note = EXCLUDED.note, assigned_at = NOW(),
-              trainer_id = EXCLUDED.trainer_id, link_id = EXCLUDED.link_id
-        RETURNING *
-        """,
-        program_id,
-        trainer_id,
-        link["client_id"],
-        link_id,
-        note,
-    )
-    return dict(row)
+
+    unique_ids = [i for i in dict.fromkeys(link_ids) if i and i > 0]
+    if not unique_ids:
+        raise AppError("VALIDATION_ERROR", "Укажите хотя бы одного клиента", http_status=400)
+
+    title = (prog["title"] or "Курс").strip() or "Курс"
+    assigned: list[dict] = []
+    for link_id in unique_ids:
+        link = await fetchrow(
+            """
+            SELECT id, client_id FROM trainer_clients
+            WHERE id = $1 AND trainer_id = $2 AND status != 'archived'
+            """,
+            link_id,
+            trainer_id,
+        )
+        if link is None:
+            raise AppError("CLIENT_NOT_FOUND", f"Клиент не найден (link_id={link_id})", http_status=404)
+        row = await fetchrow(
+            """
+            INSERT INTO client_program_assignments (program_id, trainer_id, client_id, link_id, note, status)
+            VALUES ($1, $2, $3, $4, $5, 'active')
+            ON CONFLICT (program_id, client_id) DO UPDATE
+              SET status = 'active', revoked_at = NULL, note = EXCLUDED.note, assigned_at = NOW(),
+                  trainer_id = EXCLUDED.trainer_id, link_id = EXCLUDED.link_id
+            RETURNING *
+            """,
+            program_id,
+            trainer_id,
+            link["client_id"],
+            link_id,
+            note,
+        )
+        item = dict(row)
+        assigned.append(item)
+        await create_notification(
+            link["client_id"],
+            ntype="program_assigned",
+            title="Новый курс от тренера",
+            body=f"Тренер назначил курс «{title}»",
+            payload={"program_id": program_id, "assignment_id": item["id"]},
+        )
+    return assigned
 
 
 async def revoke_program_assignment(trainer_id: int, assignment_id: int) -> dict:

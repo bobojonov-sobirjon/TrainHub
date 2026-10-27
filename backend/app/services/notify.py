@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 PREF_BY_TYPE = {
     "new_client_request": "new_client_request",
+    "request_sent": "new_client_request",
     "request_accepted": "new_client_request",
     "request_rejected": "new_client_request",
     "workout": "workout_reminder",

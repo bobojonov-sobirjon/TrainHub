@@ -1,0 +1,2 @@
+ALTER TABLE trainer_reviews
+    ADD COLUMN IF NOT EXISTS is_anonymous BOOLEAN NOT NULL DEFAULT FALSE;
