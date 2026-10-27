@@ -19,6 +19,8 @@ class UserPublic(BaseModel):
     public_id: str
     email: str | None
     phone: str | None
+    whatsapp: str | None = None
+    telegram: str | None = None
     first_name: str
     last_name: str
     avatar_url: str | None = None

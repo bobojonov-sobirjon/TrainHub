@@ -1,12 +1,120 @@
 import json
 import re
+import shutil
+import tempfile
+from pathlib import Path
 from typing import Any
+
+import anyio
 
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.db.connection import execute, fetch, fetchrow
 from app.services import notify
-from app.services.storage import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, save_bytes
+from app.services.storage import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, media_root, save_bytes
+
+_YT_ID_RE = re.compile(
+    r"(?:youtube\.com/(?:watch\?(?:[^#]*&)?v=|embed/|shorts/|live/)|youtu\.be/)([A-Za-z0-9_-]{11})"
+)
+
+
+def youtube_video_id(url: str | None) -> str | None:
+    if not url:
+        return None
+    match = _YT_ID_RE.search(url.strip())
+    return match.group(1) if match else None
+
+
+def normalize_youtube_url(url: str) -> str:
+    video_id = youtube_video_id(url)
+    if not video_id:
+        raise AppError(
+            "VALIDATION_ERROR",
+            "Можно указать только ссылку YouTube (youtube.com / youtu.be)",
+            http_status=422,
+        )
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
+def youtube_thumbnail_url(url: str | None) -> str | None:
+    video_id = youtube_video_id(url)
+    if not video_id:
+        return None
+    return f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+
+
+def _local_path_from_public(url: str) -> Path | None:
+    marker = "/media/"
+    if marker not in url:
+        return None
+    relative = url.split(marker, 1)[1]
+    path = media_root() / relative
+    return path if path.is_file() else None
+
+
+async def _thumb_from_local_video(video_public_url: str, folder: str) -> str | None:
+    if not shutil.which("ffmpeg"):
+        return None
+    source = _local_path_from_public(video_public_url)
+    if source is None:
+        return None
+    tmp = Path(tempfile.mkstemp(suffix=".jpg")[1])
+    try:
+        result = await anyio.run_process(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                "1",
+                "-i",
+                str(source),
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
+                str(tmp),
+            ],
+            check=False,
+        )
+        if result.returncode != 0 or not tmp.is_file() or tmp.stat().st_size == 0:
+            return None
+        data = await anyio.Path(tmp).read_bytes()
+        return await save_bytes(
+            data,
+            folder=f"{folder}/cover",
+            filename="auto-cover.jpg",
+            allowed=IMAGE_EXTENSIONS,
+        )
+    except Exception:
+        return None
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+async def resolve_trainer_media(
+    *,
+    folder: str,
+    video,
+    thumbnail,
+    video_url: str | None,
+) -> tuple[str | None, str | None]:
+    """Trainer: file upload and/or YouTube URL only. Auto-cover from YT or first video frame."""
+    file_url, thumb_url = await save_lesson_media(folder, video, thumbnail)
+    resolved = file_url
+    if not resolved and video_url and video_url.strip():
+        resolved = normalize_youtube_url(video_url)
+    elif video_url and video_url.strip() and not file_url and not youtube_video_id(video_url):
+        raise AppError(
+            "VALIDATION_ERROR",
+            "Можно указать только ссылку YouTube или загрузить файл видео",
+            http_status=422,
+        )
+
+    if not thumb_url and resolved:
+        thumb_url = youtube_thumbnail_url(resolved)
+        if not thumb_url and file_url:
+            thumb_url = await _thumb_from_local_video(file_url, folder)
+    return resolved, thumb_url
 
 VIDEO_STATUSES = {"draft", "processing", "pending_review", "published", "rejected", "archived"}
 LEVELS = {"beginner", "intermediate", "advanced"}

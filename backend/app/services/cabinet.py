@@ -5,17 +5,84 @@ from app.db.connection import execute, fetch, fetchrow
 from app.db.transactions import transaction
 from app.schemas.stage import MeasurementIn, NoteIn, NotificationPrefsIn
 from app.services.sessions import strength_progress
-from app.services.storage import save_bytes
+from app.services.storage import IMAGE_EXTENSIONS, save_bytes
+
+_ATTENDANCE_PRIORITY = {
+    "completed": 3,
+    "present": 3,
+    "attended": 3,
+    "no_show": 2,
+    "missed": 2,
+    "cancelled": 2,
+    "absent": 2,
+    "skipped": 2,
+    "scheduled": 1,
+    "in_progress": 1,
+}
+
+
+async def client_attendance_30d(client_id: int, trainer_id: int | None = None) -> list[dict]:
+    """Calendar visits + completed workout sessions (solo/calendar) for the last 30 days."""
+    if trainer_id is None:
+        events = await fetch(
+            """
+            SELECT starts_at::date AS date, status
+            FROM calendar_events
+            WHERE client_id = $1 AND starts_at >= (CURRENT_DATE - INTERVAL '30 days')
+            ORDER BY starts_at
+            """,
+            client_id,
+        )
+    else:
+        events = await fetch(
+            """
+            SELECT starts_at::date AS date, status
+            FROM calendar_events
+            WHERE trainer_id = $1 AND client_id = $2
+              AND starts_at >= (CURRENT_DATE - INTERVAL '30 days')
+            ORDER BY starts_at
+            """,
+            trainer_id,
+            client_id,
+        )
+    sessions = await fetch(
+        """
+        SELECT COALESCE(finished_at, started_at, created_at)::date AS date,
+               'completed'::text AS status
+        FROM workout_sessions
+        WHERE status = 'completed'
+          AND COALESCE(finished_at, started_at, created_at) >= (CURRENT_DATE - INTERVAL '30 days')
+          AND (
+            lead_client_id = $1
+            OR EXISTS (
+              SELECT 1 FROM workout_session_clients c
+              WHERE c.session_id = workout_sessions.id AND c.client_id = $1
+            )
+          )
+        ORDER BY date
+        """,
+        client_id,
+    )
+    by_day: dict[date, str] = {}
+    for row in list(events) + list(sessions):
+        day = row["date"]
+        status = (row["status"] or "").strip()
+        if day is None or not status:
+            continue
+        prev = by_day.get(day)
+        if prev is None or _ATTENDANCE_PRIORITY.get(status, 0) >= _ATTENDANCE_PRIORITY.get(prev, 0):
+            by_day[day] = status
+    return [{"date": day.isoformat(), "status": status} for day, status in sorted(by_day.items())]
 
 
 async def home(user_id: int) -> dict:
     profile = await fetchrow(
-        "SELECT created_at, weight_goal_kg FROM users WHERE id = $1",
+        "SELECT created_at, weight_goal_kg, height_cm FROM users WHERE id = $1",
         user_id,
     )
     last_m = await fetchrow(
         """
-        SELECT weight_kg, body_fat_pct, recorded_at
+        SELECT weight_kg, body_fat_pct, muscle_mass_kg, recorded_at
         FROM body_measurements WHERE client_id = $1
         ORDER BY recorded_at DESC LIMIT 1
         """,
@@ -77,15 +144,7 @@ async def home(user_id: int) -> dict:
                 last_s["id"],
             )
         ]
-    attendance = await fetch(
-        """
-        SELECT starts_at::date AS date, status
-        FROM calendar_events
-        WHERE client_id = $1 AND starts_at >= NOW() - INTERVAL '30 days'
-        ORDER BY starts_at
-        """,
-        user_id,
-    )
+    attendance = await client_attendance_30d(user_id)
     streak_rows = await fetch(
         """
         SELECT DISTINCT COALESCE(finished_at, created_at)::date AS day
@@ -148,6 +207,8 @@ async def home(user_id: int) -> dict:
     return {
         "weight_kg": current_w,
         "body_fat_pct": last_m["body_fat_pct"] if last_m else None,
+        "muscle_mass_kg": last_m["muscle_mass_kg"] if last_m else None,
+        "height_cm": profile["height_cm"] if profile else None,
         "weight_goal_kg": goal,
         "progress_pct": progress_pct,
         "weight_delta_30d": weight_delta_30d,
@@ -155,7 +216,7 @@ async def home(user_id: int) -> dict:
         "unread_count": int(unread["total"]) if unread else 0,
         "days_in_program": days,
         "weight_chart": [dict(r) for r in reversed(chart)],
-        "attendance_30d": [dict(r) for r in attendance],
+        "attendance_30d": attendance,
         "last_session": last_session,
         "trainer_notes": notes[:5],
         "has_trainer": linked is not None,
@@ -448,7 +509,12 @@ async def add_photo_set(user_id: int, taken_on: date, files: list[tuple[str, byt
         )
         images = []
         for index, (angle, data, filename) in enumerate(files):
-            url = await save_bytes(data, folder=f"progress/{user_id}", filename=filename)
+            url = await save_bytes(
+                data,
+                folder=f"progress/{user_id}",
+                filename=filename,
+                allowed=IMAGE_EXTENSIONS,
+            )
             img = await conn.fetchrow(
                 """
                 INSERT INTO photo_progress_images (set_id, angle, image_url, sort_order)

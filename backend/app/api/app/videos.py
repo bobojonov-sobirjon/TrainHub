@@ -134,7 +134,12 @@ async def create_video(
     video: UploadFile | None = File(None),
     thumbnail: UploadFile | None = File(None),
 ) -> SuccessResponse[dict]:
-    file_url, thumb_url = await svc.save_lesson_media(f"video-lessons/trainer/{user.id}", video, thumbnail)
+    resolved_url, thumb_url = await svc.resolve_trainer_media(
+        folder=f"video-lessons/trainer/{user.id}",
+        video=video,
+        thumbnail=thumbnail,
+        video_url=video_url,
+    )
     data = await svc.create_video(
         actor_id=user.id,
         source_type="trainer",
@@ -147,7 +152,7 @@ async def create_video(
         duration_seconds=duration_seconds,
         exercise_id=exercise_id,
         exercise_details=svc.build_details(exercise_name, technique, equipment, muscles, sets, reps),
-        video_url=file_url or video_url,
+        video_url=resolved_url,
         thumbnail_url=thumb_url,
         submit=submit,
         publish=False,
@@ -176,7 +181,18 @@ async def patch_video(
     video: UploadFile | None = File(None),
     thumbnail: UploadFile | None = File(None),
 ) -> SuccessResponse[dict]:
-    file_url, thumb_url = await svc.save_lesson_media(f"video-lessons/trainer/{user.id}", video, thumbnail)
+    new_file = video is not None and bool(video.filename)
+    new_link = bool(video_url and video_url.strip())
+    new_thumb = thumbnail is not None and bool(thumbnail.filename)
+    resolved_url = None
+    thumb_url = None
+    if new_file or new_link or new_thumb:
+        resolved_url, thumb_url = await svc.resolve_trainer_media(
+            folder=f"video-lessons/trainer/{user.id}",
+            video=video,
+            thumbnail=thumbnail,
+            video_url=video_url,
+        )
     details = svc.build_details(exercise_name, technique, equipment, muscles, sets, reps)
     data = await svc.update_video(
         video_id,
@@ -190,8 +206,8 @@ async def patch_video(
         duration_seconds=duration_seconds,
         exercise_id=exercise_id,
         exercise_details=details or None,
-        video_url=file_url or video_url,
-        thumbnail_url=thumb_url,
+        video_url=resolved_url if (new_file or new_link) else None,
+        thumbnail_url=thumb_url if (new_thumb or ((new_file or new_link) and thumb_url)) else None,
     )
     return SuccessResponse(data=data)
 

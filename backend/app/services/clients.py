@@ -245,7 +245,7 @@ async def get_client(trainer_id: int, link_id: int) -> dict:
         """
         SELECT
             tc.id, tc.client_id, tc.status, tc.training_format, tc.goals, tc.target_weight_kg, tc.created_at,
-            u.public_id, u.first_name, u.last_name, u.email, u.phone, u.avatar_url,
+            u.public_id, u.first_name, u.last_name, u.email, u.phone, u.whatsapp, u.telegram, u.avatar_url,
             u.gender, u.birth_date, u.height_cm, u.is_shadow, u.weight_goal_kg
         FROM trainer_clients tc
         JOIN users u ON u.id = tc.client_id
@@ -287,12 +287,19 @@ async def get_client(trainer_id: int, link_id: int) -> dict:
         """,
         row["client_id"],
     )
+    from app.services.cabinet import client_attendance_30d
+
+    attendance = await client_attendance_30d(row["client_id"], trainer_id=trainer_id)
     data = dict(row)
+    data["user_id"] = row["client_id"]
     data["subscription_ends_at"] = sub["ends_at"] if sub else None
     data["subscription_status"] = sub["status"] if sub else None
     data["notes"] = [dict(n) for n in notes]
     data["contraindications"] = [dict(x) for x in limits]
     data["last_measurement"] = dict(last_m) if last_m else None
+    data["attendance_30d"] = attendance
+    if last_m and last_m.get("weight_kg") is not None:
+        data["weight_kg"] = last_m["weight_kg"]
     return data
 
 
@@ -695,6 +702,9 @@ async def reject_request(trainer_id: int, request_id: int) -> dict:
 async def create_request(client_id: int, trainer_id: int) -> dict:
     if client_id == trainer_id:
         raise AppError("VALIDATION_ERROR", "Нельзя отправить заявку самому себе", http_status=422)
+    from app.services.users import require_phone
+
+    await require_phone(client_id)
     trainer = await fetchrow(
         """
         SELECT u.id FROM users u

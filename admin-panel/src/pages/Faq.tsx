@@ -101,7 +101,7 @@ export function FaqPage() {
       <DataTable
         rows={data ?? []}
         columns={[
-          { key: "id", label: "ID" },
+          { key: "n", label: "№" },
           {
             key: "question",
             label: "Статья",

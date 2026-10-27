@@ -187,7 +187,13 @@ class CalendarIn(BaseModel):
     format: str | None = Field(default=None, description="Формат: gym, online, hybrid, home, visit", examples=["gym"])
     kinds: list[str] = Field(default_factory=list, description="Типы тренировки из workout_kind", examples=[["strength"]])
     focus_muscles: list[str] = Field(default_factory=list, description="Целевые мышцы из muscle_group", examples=[["chest", "triceps"]])
-    note: str | None = Field(default=None, max_length=200, description="Комментарий к событию, до 200 символов", examples=["Жимовая тренировка"])
+    note: str | None = Field(default=None, max_length=1000, description="Комментарий к событию", examples=["Жимовая тренировка"])
+    # Figma «Обычная / Пробная» — stored in kinds as ordinary|trial when provided.
+    session_mode: str | None = Field(
+        default=None,
+        description="ordinary | trial (Добавить тренировки)",
+        examples=["ordinary"],
+    )
     reminder: str = Field(default="none", description="Напоминание: none, 15m, 1h, 1d", examples=["1h"])
     repeat_weekly: bool = Field(default=False, description="Повторять каждую неделю", examples=[False])
     status: str = Field(default="scheduled", description="Статус: scheduled, cancelled, done", examples=["scheduled"])
@@ -199,6 +205,12 @@ class SetIn(BaseModel):
     weight_kg: Decimal | None = Field(default=None, description="Вес, кг", examples=["60.0"])
     reps: int | None = Field(default=None, description="Повторения", examples=[10])
     is_warmup: bool = Field(default=False, description="Разминочный подход", examples=[False])
+    client_op_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Клиентский idempotency-ключ для offline-sync",
+        examples=["op_7f3a"],
+    )
 
 
 class SessionCreateIn(BaseModel):
@@ -278,7 +290,17 @@ class ProgramCreateIn(BaseModel):
     duration_weeks: int | None = Field(default=None, description="Длительность в неделях", examples=[8])
     is_pro: bool = Field(default=False, description="Только для PRO", examples=[False])
     source: str = Field(default="catalog", description="Источник: catalog, trainer, user_copy", examples=["catalog"])
-    status: str = Field(default="published", description="Статус: draft, published, archived", examples=["published"])
+    status: str = Field(
+        default="draft",
+        description="Статус: draft, pending_review, published, rejected, archived",
+        examples=["draft"],
+    )
+
+
+class ProgramWeekIn(BaseModel):
+    title: str | None = Field(default=None, description="Название недели", examples=["Неделя 1"])
+    week_index: int | None = Field(default=None, ge=1, description="Порядковый номер недели", examples=[1])
+    is_preview: bool = Field(default=False, description="Бесплатный превью для PRO-курса", examples=[False])
 
 
 class ProgramDayIn(BaseModel):
@@ -300,6 +322,7 @@ class ProgramDayIn(BaseModel):
     duration_min: int | None = Field(default=None, ge=1, le=300, description="Длительность в минутах", examples=[45])
     focus_muscles: list[str] = Field(default_factory=list, description="Коды мышц из muscle_group", examples=[["chest", "shoulders"]])
     sort_order: int | None = Field(default=None, description="Порядок. Если пусто — в конец списка", examples=[1])
+    week_id: int | None = Field(default=None, ge=1, description="ID недели (program_weeks)", examples=[1])
 
 
 class ProgramDayExerciseIn(BaseModel):
@@ -315,6 +338,28 @@ class ProgramDayExerciseIn(BaseModel):
     reps_max: int | None = Field(default=None, ge=1, le=100, description="Повторения до", examples=[12])
     note: str | None = Field(default=None, description="Заметка к упражнению", examples=["Контроль техники"])
     sort_order: int | None = Field(default=None, description="Порядок в дне", examples=[0])
+    video_lesson_id: int | None = Field(default=None, ge=1, description="Видеоурок из библиотеки", examples=[12])
+    rest_sec: int | None = Field(default=None, ge=0, le=600, description="Отдых между подходами, сек", examples=[90])
+    weight_kg: float | None = Field(default=None, ge=0, description="Рекомендуемый вес, кг", examples=[40])
+
+
+class ReorderDayExercisesIn(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"item_ids": [12, 5, 9]}]})
+
+    item_ids: list[int] = Field(
+        min_length=1,
+        description="ID строк program_day_exercises в новом порядке (сверху вниз)",
+        examples=[[12, 5, 9]],
+    )
+
+
+class ProgramRejectIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=1000, description="Причина отклонения")
+
+
+class AssignProgramIn(BaseModel):
+    link_id: int = Field(ge=1, description="ID связи trainer_clients")
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class NoteIn(BaseModel):
@@ -426,6 +471,9 @@ class ProfilePatchIn(BaseModel):
                 {
                     "first_name": "Иван",
                     "last_name": "Петров",
+                    "phone": "+79253406981",
+                    "whatsapp": "+79253406981",
+                    "telegram": "ivan_petrov",
                     "gender": "male",
                     "birth_date": "1994-05-12",
                     "height_cm": "180.0",
@@ -437,6 +485,14 @@ class ProfilePatchIn(BaseModel):
 
     first_name: str | None = Field(default=None, max_length=80, description="Имя", examples=["Иван"])
     last_name: str | None = Field(default=None, max_length=80, description="Фамилия", examples=["Петров"])
+    phone: str | None = Field(default=None, max_length=20, description="Телефон E.164 (обязателен для связи с тренером)", examples=["+79253406981"])
+    whatsapp: str | None = Field(default=None, max_length=32, description="WhatsApp: только телефон E.164 или пусто", examples=["+79253406981"])
+    telegram: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Telegram: только @username (без телефона); пусто — скрыть в UI",
+        examples=["nbekdev"],
+    )
     gender: str | None = Field(default=None, description="Пол: male, female, other", examples=["male"])
     birth_date: date | None = Field(default=None, description="Дата рождения", examples=["1994-05-12"])
     height_cm: Decimal | None = Field(default=None, description="Рост, см", examples=["180.0"])
@@ -444,10 +500,14 @@ class ProfilePatchIn(BaseModel):
 
 
 class SessionExerciseIn(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"examples": [{"exercise_id": 7, "rest_sec": 90}]})
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [{"exercise_id": 7, "rest_sec": 90, "sets": 3, "reps": 10}]}
+    )
 
     exercise_id: int = Field(description="ID упражнения", examples=[7], ge=1)
     rest_sec: int | None = Field(default=None, description="Отдых после упражнения, сек", examples=[90])
+    sets: int | None = Field(default=None, description="Запланированные подходы (как в дне программы)", examples=[3], ge=1, le=30)
+    reps: int | None = Field(default=None, description="Целевые повторения на подход", examples=[10], ge=1, le=200)
 
 
 class TicketStatusIn(BaseModel):

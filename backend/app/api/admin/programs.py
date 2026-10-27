@@ -7,7 +7,13 @@ from app.core.exceptions import AppError
 from app.deps.auth import get_admin_user
 from app.schemas.common import SuccessResponse, UserPublic
 from app.schemas.pagination import Page, page_args
-from app.schemas.stage import ExerciseCreateIn, ProgramCreateIn, ProgramDayExerciseIn, ProgramDayIn
+from app.schemas.stage import (
+    ExerciseCreateIn,
+    ProgramCreateIn,
+    ProgramDayExerciseIn,
+    ProgramDayIn,
+    ProgramRejectIn,
+)
 from app.services import catalog as cat
 from app.services.storage import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, save_bytes
 
@@ -19,6 +25,8 @@ async def list_programs(
     _user: Annotated[UserPublic, Depends(get_admin_user)],
     level: str | None = None,
     source: str | None = None,
+    status: str | None = None,
+    q: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> SuccessResponse[Page[dict]]:
@@ -32,6 +40,8 @@ async def list_programs(
         page_size=page_size,
         offset=offset,
         published_only=False,
+        status=status,
+        q=q,
     )
     return SuccessResponse(data=Page(items=items, total=total, page=page, page_size=page_size))
 
@@ -82,6 +92,30 @@ async def delete_program(
 ) -> SuccessResponse[dict]:
     await cat.admin_delete_program(program_id)
     return SuccessResponse(data={"ok": True})
+
+
+@router.post(
+    "/programs/{program_id}/approve",
+    tags=["Admin - Programs"],
+    summary="Одобрить курс (модерация)",
+)
+async def approve_program(
+    program_id: int, user: Annotated[UserPublic, Depends(get_admin_user)]
+) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await cat.approve_program(user.id, program_id))
+
+
+@router.post(
+    "/programs/{program_id}/reject",
+    tags=["Admin - Programs"],
+    summary="Отклонить курс",
+)
+async def reject_program(
+    program_id: int,
+    payload: ProgramRejectIn,
+    user: Annotated[UserPublic, Depends(get_admin_user)],
+) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await cat.reject_program(user.id, program_id, payload.reason))
 
 
 @router.post(

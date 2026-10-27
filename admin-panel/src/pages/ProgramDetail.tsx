@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { adminApi } from "../api/resources";
@@ -14,6 +14,33 @@ import { apiError } from "../lib/apiError";
 import { dash, initials, labelOf } from "../lib/format";
 import { toInt } from "../lib/numbers";
 import { PROGRAM_STATUS_LABELS, PROGRAM_STATUS_OPTIONS, SOURCE_LABELS, useDictLabel, useDictOptions } from "../lib/options";
+
+function exercisePhoto(row: Record<string, unknown> | undefined | null): string | null {
+  if (!row) return null;
+  const urls = row.photo_urls;
+  if (Array.isArray(urls) && urls.length) {
+    const first = String(urls[0] ?? "").trim();
+    if (first) return first;
+  }
+  const single = String(row.photo_url ?? "").trim();
+  return single || null;
+}
+
+function ExerciseThumb({
+  src,
+  label,
+  size = 48,
+}: {
+  src?: string | null;
+  label: string;
+  size?: number;
+}) {
+  return (
+    <div className="ex-thumb" style={{ width: size, height: size }}>
+      {src ? <img src={src} alt="" /> : <span>{initials(label)}</span>}
+    </div>
+  );
+}
 
 const emptyDay = {
   title: "",
@@ -72,6 +99,7 @@ export function ProgramDetailPage() {
   const [editingExId, setEditingExId] = useState<number | null>(null);
   const [exForm, setExForm] = useState(emptyEx);
   const [exSaving, setExSaving] = useState(false);
+  const [exSearch, setExSearch] = useState("");
   const { data, isLoading, error: loadError } = useQuery({
     queryKey: ["admin-program", programId],
     queryFn: () => adminApi.program(programId),
@@ -82,10 +110,27 @@ export function ProgramDetailPage() {
     queryFn: () => adminApi.exercises({}),
   });
   const days = Array.isArray(data?.days) ? (data.days as Record<string, unknown>[]) : [];
-  const exerciseOptions = (exerciseRows ?? []).map((row) => ({
-    value: String(row.id),
-    label: String(row.name ?? `ID ${row.id}`),
-  }));
+  const catalog = useMemo(
+    () =>
+      (exerciseRows ?? []).map((row) => ({
+        id: String(row.id),
+        name: String(row.name ?? `ID ${row.id}`),
+        muscle: String(row.primary_muscle ?? ""),
+        photo: exercisePhoto(row as Record<string, unknown>),
+      })),
+    [exerciseRows],
+  );
+  const filteredCatalog = useMemo(() => {
+    const q = exSearch.trim().toLowerCase();
+    if (!q) return catalog;
+    return catalog.filter(
+      (row) =>
+        row.name.toLowerCase().includes(q) ||
+        row.muscle.toLowerCase().includes(q) ||
+        muscleLabel(row.muscle).toLowerCase().includes(q),
+    );
+  }, [catalog, exSearch, muscleLabel]);
+  const selectedExercise = catalog.find((row) => row.id === exForm.exerciseId);
 
   useEffect(() => {
     if (!data) return;
@@ -139,13 +184,15 @@ export function ProgramDetailPage() {
     setEditingExId(null);
     setExForm(emptyEx);
     setExSaving(false);
+    setExSearch("");
   }
 
   function openExCreate(dayId: number) {
     setError("");
     setExDayId(dayId);
     setEditingExId(null);
-    setExForm({ ...emptyEx, exerciseId: exerciseOptions[0]?.value ?? "" });
+    setExSearch("");
+    setExForm({ ...emptyEx, exerciseId: catalog[0]?.id ?? "" });
     setExOpen(true);
   }
 
@@ -153,6 +200,7 @@ export function ProgramDetailPage() {
     setError("");
     setExDayId(dayId);
     setEditingExId(Number(item.id));
+    setExSearch("");
     setExForm({
       exerciseId: String(item.exercise_id ?? ""),
       sets: item.sets == null ? "" : String(item.sets),
@@ -277,6 +325,8 @@ export function ProgramDetailPage() {
     }
   }
 
+  const weeks = Array.isArray(data?.weeks) ? (data.weeks as Record<string, unknown>[]) : [];
+
   return (
     <DetailLayout
       backTo="/programs"
@@ -287,7 +337,15 @@ export function ProgramDetailPage() {
       badges={
         data ? (
           <>
-            <Badge tone={status === "published" ? "lime" : status === "archived" ? "muted" : "orange"}>
+            <Badge
+              tone={
+                status === "published"
+                  ? "lime"
+                  : status === "archived"
+                    ? "muted"
+                    : "orange"
+              }
+            >
               {labelOf(PROGRAM_STATUS_LABELS, data.status)}
             </Badge>
             <Badge>{labelOf(SOURCE_LABELS, data.source)}</Badge>
@@ -301,6 +359,25 @@ export function ProgramDetailPage() {
         success={dayOpen || exOpen ? "" : success}
       />
       {isLoading ? <p className="muted">Загрузка...</p> : null}
+      {data && weeks.length > 0 ? (
+        <Section title="Недели курса">
+          {weeks.map((week) => {
+            const weekDays = Array.isArray(week.days) ? (week.days as Record<string, unknown>[]) : [];
+            return (
+              <div key={String(week.id)} style={{ marginBottom: 16 }}>
+                <strong>
+                  {String(week.title ?? `Неделя ${week.week_index}`)}
+                  {week.is_preview ? " · превью" : ""}
+                </strong>
+                <p className="muted" style={{ marginTop: 4 }}>
+                  {weekDays.length} дн. · упражнений:{" "}
+                  {weekDays.reduce((n, d) => n + (Array.isArray(d.exercises) ? d.exercises.length : 0), 0)}
+                </p>
+              </div>
+            );
+          })}
+        </Section>
+      ) : null}
       {data ? (
         <Section title="Параметры">
           <form className="stack-form" onSubmit={(e) => void onSave(e)}>
@@ -420,11 +497,13 @@ export function ProgramDetailPage() {
                     <ul className="day-ex-list">
                       {exercises.map((item, exIndex) => {
                         const stats = exerciseStats(item);
+                        const name = String(item.name ?? item.title ?? "Упражнение");
                         return (
                           <li key={String(item.id)} className="day-ex">
                             <span className="day-ex-num">{exIndex + 1}</span>
+                            <ExerciseThumb src={exercisePhoto(item)} label={name} size={44} />
                             <div className="day-ex-copy">
-                              <strong>{dash(item.name)}</strong>
+                              <strong>{dash(name)}</strong>
                               {item.note ? <p>{dash(item.note)}</p> : null}
                             </div>
                             <div className="day-ex-stats">
@@ -513,17 +592,47 @@ export function ProgramDetailPage() {
       </Modal>
       <Modal open={exOpen} title={editingExId ? "Изменить упражнение" : "Упражнение дня"} onClose={closeExModal}>
         <Notice error={error} />
-        {exerciseOptions.length ? (
+        {catalog.length ? (
           <form className="stack-form" onSubmit={(e) => void onSaveExercise(e)}>
-            <label>
-              Упражнение
-              <Select
-                value={exForm.exerciseId}
-                onChange={(exerciseId) => setExForm((current) => ({ ...current, exerciseId }))}
-                options={exerciseOptions}
-                placeholder="Выберите упражнение"
-              />
-            </label>
+            <div className="ex-pick-head">
+              <strong>Выберите упражнение</strong>
+              {selectedExercise ? (
+                <div className="ex-pick-selected">
+                  <ExerciseThumb src={selectedExercise.photo} label={selectedExercise.name} size={36} />
+                  <span>{selectedExercise.name}</span>
+                </div>
+              ) : null}
+            </div>
+            <input
+              value={exSearch}
+              onChange={(e) => setExSearch(e.target.value)}
+              placeholder="Поиск по названию или мышце"
+            />
+            <div className="ex-pick-list">
+              {filteredCatalog.length ? (
+                filteredCatalog.map((row) => {
+                  const active = row.id === exForm.exerciseId;
+                  return (
+                    <button
+                      key={row.id}
+                      type="button"
+                      className={`ex-pick-item${active ? " is-active" : ""}`}
+                      onClick={() => setExForm((current) => ({ ...current, exerciseId: row.id }))}
+                    >
+                      <ExerciseThumb src={row.photo} label={row.name} size={48} />
+                      <span className="ex-pick-copy">
+                        <strong>{row.name}</strong>
+                        {row.muscle ? <span>{muscleLabel(row.muscle)}</span> : null}
+                      </span>
+                    </button>
+                  );
+                })
+              ) : (
+                <p className="muted" style={{ margin: 0, padding: 12 }}>
+                  Ничего не найдено
+                </p>
+              )}
+            </div>
             <div className="form-grid">
               <label>
                 Подходы
@@ -567,7 +676,7 @@ export function ProgramDetailPage() {
               <button type="button" className="ghost" onClick={closeExModal}>
                 Отмена
               </button>
-              <button type="submit" disabled={exSaving}>
+              <button type="submit" disabled={exSaving || !exForm.exerciseId}>
                 {exSaving ? "Сохранение..." : "Сохранить"}
               </button>
             </div>

@@ -162,3 +162,118 @@ async def test_trainer_sees_client_solo_progress(client: AsyncClient) -> None:
     opened = await client.get(f"/api/v1/app/sessions/{session_id}", headers=_auth(trainer))
     assert opened.status_code == 200, opened.text
     assert opened.json()["data"]["trainer_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_add_set_client_op_id_is_idempotent(client: AsyncClient) -> None:
+    person = await _register(client, "client", "Idem")
+    headers = _auth(person)
+    exercises = await client.get("/api/v1/app/exercises", headers=headers)
+    exercise_id = exercises.json()["data"][0]["id"]
+
+    started = await client.post(
+        "/api/v1/app/sessions",
+        headers=headers,
+        json={"source": "new", "kinds": ["strength"]},
+    )
+    session_id = started.json()["data"]["id"]
+    added = await client.post(
+        f"/api/v1/app/sessions/{session_id}/exercises",
+        headers=headers,
+        json={"exercise_id": exercise_id},
+    )
+    se_id = added.json()["data"]["added_exercise_id"]
+
+    payload = {"weight_kg": "55.0", "reps": 7, "client_op_id": "op_test_same"}
+    first = await client.post(
+        f"/api/v1/app/sessions/{session_id}/exercises/{se_id}/sets",
+        headers=headers,
+        json=payload,
+    )
+    second = await client.post(
+        f"/api/v1/app/sessions/{session_id}/exercises/{se_id}/sets",
+        headers=headers,
+        json=payload,
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    sets = first.json()["data"]["exercises"][0]["sets"]
+    sets2 = second.json()["data"]["exercises"][0]["sets"]
+    assert len(sets) == 1
+    assert len(sets2) == 1
+    assert sets[0]["id"] == sets2[0]["id"]
+    assert sets[0].get("completed_at") is not None
+
+    # complete twice stays completed
+    done1 = await client.post(f"/api/v1/app/sessions/{session_id}/complete", headers=headers)
+    done2 = await client.post(f"/api/v1/app/sessions/{session_id}/complete", headers=headers)
+    assert done1.status_code == 200
+    assert done2.status_code == 200
+    assert done2.json()["data"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_start_session_from_published_program_day(client: AsyncClient) -> None:
+    from app.core.constants import ROLE_ADMIN
+    from app.core.security import hash_password
+    from app.db.sql_loader import sql
+    from app.db.transactions import transaction
+    import uuid as _uuid
+
+    trainer = await _register(client, "trainer", "Coach")
+    person = await _register(client, "client", "Athlete")
+    t = _auth(trainer)
+    c = _auth(person)
+
+    exercises = await client.get("/api/v1/app/exercises", headers=c)
+    exercise_id = exercises.json()["data"][0]["id"]
+
+    created = await client.post(
+        "/api/v1/app/programs",
+        headers=t,
+        json={"title": "Каталог день", "level": "beginner", "status": "draft"},
+    )
+    program_id = created.json()["data"]["id"]
+    day = await client.post(
+        f"/api/v1/app/programs/{program_id}/days",
+        headers=t,
+        json={"title": "День 1", "duration_min": 40},
+    )
+    day_id = day.json()["data"]["days"][0]["id"]
+    await client.post(
+        f"/api/v1/app/programs/{program_id}/days/{day_id}/exercises",
+        headers=t,
+        json={"exercise_id": exercise_id, "sets": 2, "reps_min": 8, "reps_max": 10},
+    )
+    await client.post(f"/api/v1/app/programs/{program_id}/submit", headers=t)
+
+    email = f"admin_{_uuid.uuid4().hex[:8]}@example.com"
+    async with transaction() as conn:
+        user = await conn.fetchrow(
+            sql("auth/insert_user.sql"),
+            email,
+            None,
+            hash_password("Password12"),
+            "Admin",
+            "QA",
+            None,
+            None,
+        )
+        await conn.execute(sql("auth/insert_role.sql"), user["id"], ROLE_ADMIN)
+    login = await client.post("/api/v1/admin/auth/login", json={"login": email, "password": "Password12"})
+    admin = {"Authorization": f"Bearer {login.json()['data']['access_token']}"}
+    approve = await client.post(f"/api/v1/admin/programs/{program_id}/approve", headers=admin)
+    assert approve.status_code == 200, approve.text
+
+    started = await client.post(
+        "/api/v1/app/sessions",
+        headers=c,
+        json={"source": "program", "kinds": ["strength"], "program_day_id": day_id},
+    )
+    assert started.status_code == 200, started.text
+    data = started.json()["data"]
+    assert data["program_day_id"] == day_id
+    assert len(data["exercises"]) >= 1
+    assert data["exercises"][0]["exercise_id"] == exercise_id
+    # planned sets seeded, not yet completed
+    assert len(data["exercises"][0]["sets"]) == 2

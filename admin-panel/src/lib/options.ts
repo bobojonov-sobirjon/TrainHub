@@ -21,6 +21,11 @@ export const PROGRAM_STATUS_OPTIONS: SelectOption[] = [
   { value: "archived", label: "архив" },
 ];
 
+export const PROGRAM_STATUS_FILTER_OPTIONS: SelectOption[] = [
+  { value: "", label: "все статусы" },
+  ...PROGRAM_STATUS_OPTIONS,
+];
+
 export const FAQ_AUDIENCE_OPTIONS: SelectOption[] = [
   { value: "all", label: "все" },
   { value: "trainer", label: "Coach" },
@@ -103,6 +108,9 @@ export const PROGRAM_STATUS_LABELS: Record<string, string> = {
   draft: "черновик",
   published: "опубликована",
   archived: "архив",
+  // legacy (moderation removed)
+  pending_review: "черновик",
+  rejected: "черновик",
 };
 
 export function useDictionaries() {
@@ -113,16 +121,75 @@ export function useDictionaries() {
   });
 }
 
+/** Fallback RU titles when API dict is stale or seed used extra codes. */
+const DICT_FALLBACKS: Record<string, Record<string, string>> = {
+  muscle_group: {
+    neck: "Шея",
+    shoulders: "Плечи",
+    chest: "Грудь",
+    back: "Спина",
+    waist: "Талия",
+    glutes: "Ягодицы",
+    thighs: "Бёдра",
+    calves: "Икры",
+    biceps: "Бицепс",
+    triceps: "Трицепс",
+    forearms: "Предплечья",
+    arms: "Руки",
+    legs: "Ноги",
+    traps: "Трапеции",
+    abs: "Пресс",
+    press: "Пресс",
+    full_body: "Всё тело",
+    other: "Другое",
+  },
+  equipment: {
+    none: "Нет",
+    bodyweight: "Свой вес",
+    dumbbells: "Гантели",
+    dumbbell: "Гантель",
+    barbell: "Штанга",
+    kettlebell: "Гиря",
+    plate: "Диск",
+    bench: "Скамья для жима",
+    cable: "Блок",
+    machine: "Тренажёр",
+    gym: "Тренажёрный зал",
+    other: "Другое",
+  },
+  workout_kind: {
+    strength: "Силовая",
+    functional: "Функциональный",
+    cardio: "Кардио",
+    stretching: "Растяжка",
+    circuit: "Круговая",
+    interval: "Интервальная",
+    rehab: "Реабилитация",
+    endurance: "Выносливость",
+  },
+};
+
 export function useDictOptions(category: string): SelectOption[] {
   const { data } = useDictionaries();
-  return (data?.items ?? [])
+  const fromApi = (data?.items ?? [])
     .filter((item) => item.category === category)
     .sort((a, b) => a.sort_order - b.sort_order)
     .map((item) => ({ value: item.code, label: item.title_ru }));
+  const seen = new Set(fromApi.map((item) => item.value));
+  const fallback = DICT_FALLBACKS[category] ?? {};
+  const extras = Object.entries(fallback)
+    .filter(([code]) => !seen.has(code))
+    .map(([value, label]) => ({ value, label }));
+  return [...fromApi, ...extras];
 }
 
 export function useDictLabel(category: string) {
   const options = useDictOptions(category);
   const map = Object.fromEntries(options.map((item) => [item.value, item.label]));
-  return (code: unknown) => map[String(code)] ?? (code == null || code === "" ? "—" : String(code));
+  const fallback = DICT_FALLBACKS[category] ?? {};
+  return (code: unknown) => {
+    if (code == null || code === "") return "—";
+    const key = String(code);
+    return map[key] ?? fallback[key] ?? key;
+  };
 }

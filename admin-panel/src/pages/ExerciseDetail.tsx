@@ -6,7 +6,7 @@ import { ChipGroup } from "../components/ChipGroup";
 import { DetailLayout } from "../components/DetailLayout";
 import { Notice } from "../components/Notice";
 import { Select } from "../components/Select";
-import { FileField, ImageField } from "../components/MediaFields";
+import { ImageField } from "../components/MediaFields";
 import { Badge, Section } from "../components/Ui";
 import { apiError } from "../lib/apiError";
 import { initials } from "../lib/format";
@@ -29,9 +29,6 @@ export function ExerciseDetailPage() {
   const [secondary, setSecondary] = useState<string[]>([]);
   const [photos, setPhotos] = useState<string[]>([]);
   const [photoFiles, setPhotoFiles] = useState<File[]>([]);
-  const [videoUrl, setVideoUrl] = useState("");
-  const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [clearVideo, setClearVideo] = useState(false);
   const [error, setError] = useState("");
   const { data, isLoading, error: loadError } = useQuery({
     queryKey: ["admin-exercise", exerciseId],
@@ -53,9 +50,6 @@ export function ExerciseDetailPage() {
         : [];
     setPhotos(urls);
     setPhotoFiles([]);
-    setVideoUrl(String(data.video_url ?? ""));
-    setVideoFile(null);
-    setClearVideo(false);
   }, [data]);
 
   async function onSave(event: FormEvent) {
@@ -70,9 +64,8 @@ export function ExerciseDetailPage() {
       payload.append("exercise_type", kind);
       payload.append("secondary_muscles", JSON.stringify(secondary));
       payload.append("keep_photos", JSON.stringify(photos));
-      payload.append("clear_video", clearVideo ? "true" : "false");
+      payload.append("clear_video", "false");
       photoFiles.forEach((file) => payload.append("photos", file));
-      if (videoFile) payload.append("video", videoFile);
       await adminApi.updateExercise(exerciseId, payload);
       await queryClient.invalidateQueries({ queryKey: ["admin-exercises"] });
       await queryClient.invalidateQueries({ queryKey: ["admin-exercise", exerciseId] });
@@ -88,7 +81,6 @@ export function ExerciseDetailPage() {
       title={data ? String(data.name) : "Упражнение"}
       subtitle={data ? muscleLabel(data.primary_muscle) : undefined}
       avatar={data ? initials(data.name) : "У"}
-      meta={data ? `ID ${data.id}` : undefined}
       badges={
         data ? (
           <>
@@ -105,15 +97,22 @@ export function ExerciseDetailPage() {
           <form className="stack-form" onSubmit={(e) => void onSave(e)}>
             <label>
               Название
-              <input value={name} onChange={(e) => setName(e.target.value)} required />
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Например: Жим лёжа" required />
             </label>
             <div className="form-grid">
               <label>
                 Основная мышца
-                <Select value={muscle} onChange={setMuscle} options={muscles} placeholder="Мышца" />
+                <Select
+                  value={muscle}
+                  onChange={setMuscle}
+                  options={muscles}
+                  placeholder="Выберите мышцу"
+                  allowEmpty
+                  emptyLabel="Выберите мышцу"
+                />
               </label>
               <label>
-                Тип
+                Тип упражнения
                 <Select value={kind} onChange={setKind} options={kinds} placeholder="Тип" />
               </label>
               <label>
@@ -134,23 +133,12 @@ export function ExerciseDetailPage() {
             </label>
             <ImageField
               id="exercise-edit-photos"
+              label="Фото упражнения"
+              hint="Можно несколько изображений (JPG, PNG, WEBP)."
               existing={photos}
               files={photoFiles}
               onFiles={setPhotoFiles}
               onRemoveExisting={(url) => setPhotos((current) => current.filter((item) => item !== url))}
-            />
-            <FileField
-              id="exercise-edit-video"
-              existingUrl={clearVideo ? null : videoUrl || null}
-              file={videoFile}
-              onFile={(next) => {
-                setVideoFile(next);
-                if (next) setClearVideo(false);
-              }}
-              onClear={() => {
-                setVideoFile(null);
-                setClearVideo(true);
-              }}
             />
             <div className="modal-actions">
               <button type="submit">Сохранить</button>

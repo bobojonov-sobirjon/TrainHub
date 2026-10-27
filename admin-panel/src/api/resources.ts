@@ -40,6 +40,8 @@ export const adminApi = {
     return api.post(`/programs/${id}/cover`, form);
   },
   archiveProgram: (id: number) => api.delete(`/programs/${id}`),
+  approveProgram: (id: number) => api.post(`/programs/${id}/approve`),
+  rejectProgram: (id: number, reason: string) => api.post(`/programs/${id}/reject`, { reason }),
   createProgramDay: (programId: number, payload: Record<string, unknown>) =>
     api.post(`/programs/${programId}/days`, payload),
   updateProgramDay: (programId: number, dayId: number, payload: Record<string, unknown>) =>
@@ -82,4 +84,23 @@ export const adminApi = {
     }
     return api.post(`/legal/${docType}/file`, form);
   },
+
+  // ── Video lessons (categories → topics → videos) ──────────────────────────
+  videoCategories: () => getData<Record<string, unknown>[]>("/categories"),
+  createVideoCategory: (payload: Record<string, unknown>) => api.post("/categories", payload),
+  updateVideoCategory: (id: number, payload: Record<string, unknown>) =>
+    api.patch(`/categories/${id}`, payload),
+  archiveVideoCategory: (id: number) => api.post(`/categories/${id}/archive`),
+  categoryTopics: (categoryId: number) =>
+    getData<Record<string, unknown>[]>(`/categories/${categoryId}/topics`),
+  createTopic: (payload: Record<string, unknown>) => api.post("/topics", payload),
+  updateTopic: (id: number, payload: Record<string, unknown>) => api.patch(`/topics/${id}`, payload),
+  videos: (query: Query) => getData<Page<Record<string, unknown>>>("/videos", query),
+  video: (id: number) => getData<Record<string, unknown>>(`/videos/${id}`),
+  createVideo: (form: FormData) => api.post("/videos", form),
+  updateVideo: (id: number, form: FormData) => api.patch(`/videos/${id}`, form),
+  approveVideo: (id: number) => api.post(`/videos/${id}/approve`),
+  rejectVideo: (id: number, reason: string) => api.post(`/videos/${id}/reject`, { reason }),
+  archiveVideo: (id: number) => api.post(`/videos/${id}/archive`),
+  videoAssignments: (id: number) => getData<Record<string, unknown>[]>(`/videos/${id}/assignments`),
 };

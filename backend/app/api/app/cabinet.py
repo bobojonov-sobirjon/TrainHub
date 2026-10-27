@@ -92,7 +92,7 @@ async def add_photo(
     user: Annotated[UserPublic, Depends(get_app_user)],
     taken_on: date = Form(..., description="Дата съёмки YYYY-MM-DD", examples=["2026-09-19"]),
     angles: str = Form("front", description="Ракурсы через запятую: front, side, back", examples=["front,side,back"]),
-    files: list[UploadFile] = File(..., description="До 3 изображений JPEG/PNG"),
+    files: list[UploadFile] = File(..., description="До 3 изображений (JPEG/PNG/HEIC)"),
 ) -> SuccessResponse[dict]:
     allowed = {"front", "side", "back"}
     angle_list = [item.strip() for item in angles.split(",") if item.strip() in allowed]

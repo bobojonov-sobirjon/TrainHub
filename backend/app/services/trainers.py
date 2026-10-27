@@ -129,6 +129,10 @@ async def list_marketplace(
             COALESCE(tp.rating_avg, 0) AS rating_avg,
             COALESCE(tp.reviews_count, 0) AS reviews_count,
             tp.category,
+            tp.session_price_amount,
+            COALESCE(tp.work_formats, ARRAY[]::text[]) AS work_formats,
+            COALESCE(tp.free_first_consult, FALSE) AS free_first_consult,
+            tp.session_duration_min,
             (
                 SELECT COUNT(*) FROM programs p
                 WHERE p.author_id = u.id AND p.status = 'published'
@@ -247,8 +251,8 @@ async def attention_list(trainer_id: int) -> list[dict]:
     rows = await fetch(
         """
         SELECT a.id, a.reason, a.created_at, a.is_resolved,
-               u.id AS client_id, u.first_name, u.last_name, u.phone, u.avatar_url,
-               tc.training_format,
+               u.id AS client_id, u.first_name, u.last_name, u.phone, u.whatsapp, u.telegram, u.avatar_url,
+               tc.id AS link_id, tc.training_format, tc.target_weight_kg, tc.created_at AS client_since,
                (
                    SELECT MAX(COALESCE(s.finished_at, s.created_at))
                    FROM workout_sessions s
@@ -257,10 +261,16 @@ async def attention_list(trainer_id: int) -> list[dict]:
                          SELECT 1 FROM workout_session_clients c
                          WHERE c.session_id = s.id AND c.client_id = u.id
                      ))
-               ) AS last_session_at
+               ) AS last_session_at,
+               (
+                   SELECT m.weight_kg FROM body_measurements m
+                   WHERE m.client_id = u.id
+                   ORDER BY m.recorded_at DESC LIMIT 1
+               ) AS weight_kg
         FROM attention_items a
         JOIN users u ON u.id = a.client_id
         LEFT JOIN trainer_clients tc ON tc.trainer_id = a.trainer_id AND tc.client_id = a.client_id
+            AND tc.archived_at IS NULL
         WHERE a.trainer_id = $1 AND a.is_resolved = FALSE
         ORDER BY a.created_at DESC
         """,

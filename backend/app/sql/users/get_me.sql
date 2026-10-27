@@ -3,6 +3,8 @@ SELECT
     u.public_id,
     u.email,
     u.phone,
+    u.whatsapp,
+    u.telegram,
     u.first_name,
     u.last_name,
     u.avatar_url,

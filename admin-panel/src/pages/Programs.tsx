@@ -12,7 +12,14 @@ import { Badge, EntityCell } from "../components/Ui";
 import { useFlashSuccess } from "../hooks/useFlashSuccess";
 import { apiError } from "../lib/apiError";
 import { toInt } from "../lib/numbers";
-import { PROGRAM_STATUS_LABELS, PROGRAM_STATUS_OPTIONS, SOURCE_LABELS, useDictLabel, useDictOptions } from "../lib/options";
+import {
+  PROGRAM_STATUS_FILTER_OPTIONS,
+  PROGRAM_STATUS_LABELS,
+  PROGRAM_STATUS_OPTIONS,
+  SOURCE_LABELS,
+  useDictLabel,
+  useDictOptions,
+} from "../lib/options";
 import { dash, initials, labelOf } from "../lib/format";
 
 const emptyProgram = {
@@ -38,10 +45,18 @@ export function ProgramsPage() {
   const [form, setForm] = useState(emptyProgram);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [search, setSearch] = useState("");
   const { success, setSuccess } = useFlashSuccess();
   const { data, isLoading, error: loadError } = useQuery({
-    queryKey: ["admin-programs"],
-    queryFn: () => adminApi.programs({ page: 1, page_size: 50 }),
+    queryKey: ["admin-programs", statusFilter, search],
+    queryFn: () =>
+      adminApi.programs({
+        page: 1,
+        page_size: 50,
+        ...(statusFilter ? { status: statusFilter } : {}),
+        ...(search.trim() ? { q: search.trim() } : {}),
+      }),
   });
 
   function closeModal() {
@@ -108,12 +123,26 @@ export function ProgramsPage() {
           Создать
         </button>
       </div>
+      <div className="toolbar" style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        <input
+          placeholder="Поиск по названию"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ minWidth: 200, flex: 1 }}
+        />
+        <Select
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={PROGRAM_STATUS_FILTER_OPTIONS}
+          placeholder="Статус"
+        />
+      </div>
       <Notice error={open ? "" : error || (loadError ? apiError(loadError, "Не удалось загрузить программы") : "")} success={success} />
       {isLoading ? <p className="muted">Загрузка...</p> : null}
       <DataTable
         rows={data?.items ?? []}
         columns={[
-          { key: "id", label: "ID" },
+          { key: "n", label: "№" },
           {
             key: "title",
             label: "Программа",
@@ -129,7 +158,15 @@ export function ProgramsPage() {
             key: "status",
             label: "Статус",
             render: (row) => (
-              <Badge tone={row.status === "published" ? "lime" : row.status === "archived" ? "muted" : "orange"}>
+              <Badge
+                tone={
+                  row.status === "published"
+                    ? "lime"
+                    : row.status === "archived"
+                      ? "muted"
+                      : "orange"
+                }
+              >
                 {labelOf(PROGRAM_STATUS_LABELS, row.status)}
               </Badge>
             ),

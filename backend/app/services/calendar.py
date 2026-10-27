@@ -51,10 +51,61 @@ async def list_events(
     return [dict(r) for r in rows]
 
 
+async def list_client_events(
+    client_id: int,
+    date_from: datetime | None,
+    date_to: datetime | None,
+) -> list[dict]:
+    args: list = [client_id]
+    where = ["e.client_id = $1", "e.status <> 'cancelled'"]
+    if date_from:
+        args.append(date_from)
+        where.append(f"e.starts_at >= ${len(args)}")
+    if date_to:
+        args.append(date_to)
+        where.append(f"e.starts_at < ${len(args)}")
+    rows = await fetch(
+        f"""
+        SELECT
+            e.id, e.client_id, e.trainer_id, e.starts_at, e.ends_at, e.duration_min, e.format,
+            e.kinds, e.focus_muscles, e.status, e.note, e.reminder, e.repeat_weekly, e.session_id,
+            t.first_name, t.last_name, t.phone, t.avatar_url
+        FROM calendar_events e
+        LEFT JOIN users t ON t.id = e.trainer_id
+        WHERE {" AND ".join(where)}
+        ORDER BY e.starts_at ASC
+        """,
+        *args,
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_client_event(client_id: int, event_id: int) -> dict:
+    row = await fetchrow(
+        """
+        SELECT
+            e.*, t.first_name, t.last_name, t.phone, t.avatar_url
+        FROM calendar_events e
+        LEFT JOIN users t ON t.id = e.trainer_id
+        WHERE e.id = $1 AND e.client_id = $2
+        """,
+        event_id,
+        client_id,
+    )
+    if row is None:
+        raise AppError("EVENT_NOT_FOUND", "Событие календаря не найдено", http_status=404)
+    return dict(row)
+
+
 async def create_event(trainer_id: int, payload) -> dict:
-    if payload.reminder not in {"none", "1h", "3h"}:
+    # Figma reminders: none / 15m / 1h / 1d; legacy 3h still accepted
+    if payload.reminder not in {"none", "1h", "3h", "15m", "1d"}:
         raise AppError("VALIDATION_ERROR", "Некорректное напоминание", http_status=422)
     duration = int((payload.ends_at - payload.starts_at).total_seconds() // 60)
+    kinds = list(payload.kinds or [])
+    mode = getattr(payload, "session_mode", None)
+    if mode in {"ordinary", "trial"} and mode not in kinds:
+        kinds = [mode, *kinds]
     row = await fetchrow(
         """
         INSERT INTO calendar_events (
@@ -69,7 +120,7 @@ async def create_event(trainer_id: int, payload) -> dict:
         payload.ends_at,
         duration,
         payload.format,
-        payload.kinds,
+        kinds,
         payload.focus_muscles,
         payload.status,
         payload.note,
@@ -108,7 +159,7 @@ async def create_event(trainer_id: int, payload) -> dict:
 async def get_event(trainer_id: int, event_id: int) -> dict:
     row = await fetchrow(
         """
-        SELECT e.*, u.first_name, u.last_name, u.phone, u.avatar_url,
+        SELECT e.*, u.first_name, u.last_name, u.phone, u.whatsapp, u.telegram, u.avatar_url,
                tc.created_at AS client_since
         FROM calendar_events e
         LEFT JOIN users u ON u.id = e.client_id

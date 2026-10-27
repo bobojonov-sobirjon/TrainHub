@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.exceptions import (
     AppError,
     app_error_handler,
+    unhandled_error_handler,
     validation_error_handler,
 )
 from app.core.logging import setup_logging
@@ -107,6 +108,7 @@ def create_app() -> FastAPI:
     )
     app.add_exception_handler(AppError, app_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
+    app.add_exception_handler(Exception, unhandled_error_handler)
 
     app.include_router(health_router)
     app.include_router(pay_router)

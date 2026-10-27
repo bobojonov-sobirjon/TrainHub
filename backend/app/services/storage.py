@@ -12,13 +12,15 @@ ALLOWED_EXTENSIONS = {
     ".png",
     ".webp",
     ".gif",
+    ".heic",
+    ".heif",
     ".mp4",
     ".mov",
     ".webm",
     ".pdf",
 }
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
 
 LEGAL_EXTENSIONS = {".pdf", ".doc", ".docx"}

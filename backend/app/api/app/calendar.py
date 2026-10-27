@@ -3,13 +3,30 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.deps.roles import require_trainer
+from app.deps.roles import require_client, require_trainer
 from app.schemas.common import SuccessResponse, UserPublic
 from app.schemas.stage import CalendarIn, SessionCreateIn
 from app.services import calendar as cal
 from app.services import sessions as sess
 
 router = APIRouter(prefix="/trainer/calendar")
+client_router = APIRouter(prefix="/client/calendar")
+
+
+@client_router.get("", tags=["Client"], summary="Календарь клиента")
+async def client_list_events(
+    user: Annotated[UserPublic, Depends(require_client)],
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> SuccessResponse[list]:
+    return SuccessResponse(data=await cal.list_client_events(user.id, date_from, date_to))
+
+
+@client_router.get("/{event_id}", tags=["Client"], summary="Карточка события клиента")
+async def client_event_detail(
+    event_id: int, user: Annotated[UserPublic, Depends(require_client)]
+) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await cal.get_client_event(user.id, event_id))
 
 
 @router.get("", tags=["Coach - Calendar"], summary="События календаря")

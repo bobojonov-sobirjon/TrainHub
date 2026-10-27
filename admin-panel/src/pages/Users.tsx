@@ -73,7 +73,7 @@ export function UsersPage({ lockedRole }: { lockedRole?: string }) {
         }
         emptyHint={q ? "Попробуйте изменить запрос или роль." : undefined}
         columns={[
-          { key: "id", label: "ID" },
+          { key: "n", label: "№" },
           {
             key: "name",
             label: "Пользователь",

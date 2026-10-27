@@ -50,10 +50,11 @@ async def test_program_detail_includes_video_fields(client: AsyncClient) -> None
     created = await client.post(
         "/api/v1/app/programs",
         headers=t_headers,
-        json={"title": "Видео тест", "level": "beginner", "status": "published", "is_pro": False},
+        json={"title": "Видео тест", "level": "beginner", "status": "draft", "is_pro": False},
     )
     assert created.status_code == 200, created.text
     program_id = created.json()["data"]["id"]
+    assert created.json()["data"]["status"] == "draft"
 
     day = await client.post(
         f"/api/v1/app/programs/{program_id}/days",
@@ -70,7 +71,8 @@ async def test_program_detail_includes_video_fields(client: AsyncClient) -> None
     )
     assert added.status_code == 200, added.text
 
-    detail = await client.get(f"/api/v1/app/programs/{program_id}", headers=c_headers)
+    # Author can open draft; other clients cannot until published
+    detail = await client.get(f"/api/v1/app/programs/{program_id}", headers=t_headers)
     assert detail.status_code == 200, detail.text
     days = detail.json()["data"]["days"]
     items = [ex for d in days for ex in d.get("exercises") or []]
@@ -79,5 +81,8 @@ async def test_program_detail_includes_video_fields(client: AsyncClient) -> None
     assert first["exercise_id"] == exercise_id
     assert "video_url" in first
     assert first["has_video"] is bool(first["video_url"])
+
+    hidden = await client.get(f"/api/v1/app/programs/{program_id}", headers=c_headers)
+    assert hidden.status_code == 404
     assert "photo_url" in first
     assert "name" in first
