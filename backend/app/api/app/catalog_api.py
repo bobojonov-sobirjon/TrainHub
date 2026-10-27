@@ -571,6 +571,26 @@ async def add_set(
 
 
 @router.post(
+    "/sessions/{session_id}/pause",
+    tags=["Shared - Sessions"],
+    summary="Пауза тренировки",
+    description="Останавливает таймер. Пока на паузе — сессия не abandoned по таймауту 1ч.",
+)
+async def pause_session(session_id: int, user: Annotated[UserPublic, Depends(get_app_user)]) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await sess.pause_session(session_id, user.id, ROLE_TRAINER in user.roles))
+
+
+@router.post(
+    "/sessions/{session_id}/resume",
+    tags=["Shared - Sessions"],
+    summary="Продолжить тренировку",
+    description="Снимает паузу и продолжает таймер.",
+)
+async def resume_session(session_id: int, user: Annotated[UserPublic, Depends(get_app_user)]) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await sess.resume_session(session_id, user.id, ROLE_TRAINER in user.roles))
+
+
+@router.post(
     "/sessions/{session_id}/complete",
     tags=["Shared - Sessions"],
     summary="Завершить тренировку",
