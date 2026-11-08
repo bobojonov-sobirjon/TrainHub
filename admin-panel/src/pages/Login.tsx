@@ -7,7 +7,7 @@ import { Notice } from "../components/Notice";
 export function LoginPage() {
   const { user, signIn } = useAuth();
   const navigate = useNavigate();
-  const [loginValue, setLoginValue] = useState("admin@trainhub.local");
+  const [loginValue, setLoginValue] = useState("admin");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -33,12 +33,18 @@ export function LoginPage() {
   return (
     <div className="login-wrap">
       <form className="card login-card" onSubmit={onSubmit}>
+        <img className="login-logo" src="/logo.png" alt="TrainHub" />
         <p className="eyebrow">TrainHub</p>
         <h1>Админ-панель</h1>
-        <p className="muted">Войдите отдельной учётной записью администратора. Токены тренера и клиента сюда не подходят.</p>
+        <p className="muted">Войдите учётной записью администратора.</p>
         <label>
-          Email или телефон
-          <input value={loginValue} onChange={(e) => setLoginValue(e.target.value)} required />
+          Username
+          <input
+            value={loginValue}
+            onChange={(e) => setLoginValue(e.target.value)}
+            autoComplete="username"
+            required
+          />
         </label>
         <label>
           Пароль
@@ -46,6 +52,7 @@ export function LoginPage() {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
             required
           />
         </label>

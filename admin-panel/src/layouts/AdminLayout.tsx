@@ -12,6 +12,7 @@ const links = [
   { to: "/faq", label: "FAQ" },
   { to: "/tickets", label: "Обращения" },
   { to: "/legal", label: "Документы" },
+  { to: "/settings", label: "Настройки" },
 ];
 
 export function AdminLayout() {
@@ -21,8 +22,8 @@ export function AdminLayout() {
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-dot" />
-          TrainHub
+          <img className="brand-logo" src="/logo.png" alt="TrainHub" />
+          <span>TrainHub</span>
         </div>
         <nav>
           {links.map((link) => (

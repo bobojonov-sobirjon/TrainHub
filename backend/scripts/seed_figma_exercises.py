@@ -15,29 +15,56 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.db.connection import execute, fetchrow
+from app.db.connection import execute, fetch, fetchrow
 from app.db.pool import close_pool, create_pool
 from app.services.storage import media_root, public_url
 
 ASSETS = Path(__file__).resolve().parent / "figma_exercises"
 
+# HQ Photoroom exports from Figma (transparent PNG, ~300–1024px) — not the old 24–52px circle crops.
 EXERCISES: list[dict] = [
-    {"name": "Разминка", "primary_muscle": "full_body", "equipment": "bodyweight", "exercise_type": "stretching", "file": "warm.png"},
-    {"name": "Жим лежа (Штанга)", "primary_muscle": "chest", "equipment": "barbell", "exercise_type": "strength", "file": "bench.png"},
-    {"name": "Жим лежа (Гантели)", "primary_muscle": "chest", "equipment": "dumbbell", "exercise_type": "strength", "file": "ex2.png"},
-    {"name": "Бабочка (Грудные мышцы)", "primary_muscle": "chest", "equipment": "machine", "exercise_type": "strength", "file": "ex1.png"},
-    {"name": "Разгибание на трицепс", "primary_muscle": "arms", "equipment": "cable", "exercise_type": "strength", "file": "ex3.png"},
-    {"name": "Вертикальная тяга", "primary_muscle": "back", "equipment": "machine", "exercise_type": "strength", "file": "ex4.png"},
-    {"name": "Тяга нижнего блока", "primary_muscle": "back", "equipment": "cable", "exercise_type": "strength", "file": "ex5.png"},
-    {"name": "Шраги (Гантели)", "primary_muscle": "traps", "equipment": "dumbbell", "exercise_type": "strength", "file": "circle1.png"},
-    {"name": "Жимы ногами", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "ex2.png"},
-    {"name": "Сгибание ног лежа", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "ex3.png"},
-    {"name": "Разгибание ног", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "ex4.png"},
-    {"name": "Подъем носков стоя", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "ex5.png"},
-    {"name": "Жим гантелей сидя", "primary_muscle": "shoulders", "equipment": "dumbbell", "exercise_type": "strength", "file": "ex1.png"},
-    {"name": "Разведение гантелей в стороны", "primary_muscle": "shoulders", "equipment": "dumbbell", "exercise_type": "strength", "file": "circle1.png"},
-    {"name": "Жим в тренажере (грудь)", "primary_muscle": "chest", "equipment": "machine", "exercise_type": "strength", "file": "bench.png"},
+    {"name": "Разминка", "primary_muscle": "full_body", "equipment": "bodyweight", "exercise_type": "stretching", "file": "hq_warm.png"},
+    {"name": "Жим лежа (Штанга)", "primary_muscle": "chest", "equipment": "barbell", "exercise_type": "strength", "file": "hq_bench.png"},
+    {"name": "Жим с плеч (Гантель)", "primary_muscle": "shoulders", "equipment": "dumbbell", "exercise_type": "strength", "file": "hq_shoulder.png"},
+    {"name": "Бабочка (Грудная клетка)", "primary_muscle": "chest", "equipment": "machine", "exercise_type": "strength", "file": "hq_butterfly.png"},
+    {"name": "Бабочка (Грудные мышцы)", "primary_muscle": "chest", "equipment": "machine", "exercise_type": "strength", "file": "hq_butterfly.png"},
+    {"name": "Разгибания на трицепс (блок)", "primary_muscle": "arms", "equipment": "cable", "exercise_type": "strength", "file": "hq_tricep.png"},
+    {"name": "Разгибание на трицепс", "primary_muscle": "arms", "equipment": "cable", "exercise_type": "strength", "file": "hq_tricep.png"},
+    {"name": "Вертикальная тяга (блок)", "primary_muscle": "back", "equipment": "machine", "exercise_type": "strength", "file": "hq_lat.png"},
+    {"name": "Вертикальная тяга", "primary_muscle": "back", "equipment": "machine", "exercise_type": "strength", "file": "hq_lat.png"},
+    {"name": "Тяга нижнего блока к поясу (Блок)", "primary_muscle": "back", "equipment": "cable", "exercise_type": "strength", "file": "hq_row.png"},
+    {"name": "Тяга нижнего блока", "primary_muscle": "back", "equipment": "cable", "exercise_type": "strength", "file": "hq_row.png"},
+    {"name": "Шраги (Гантель)", "primary_muscle": "traps", "equipment": "dumbbell", "exercise_type": "strength", "file": "hq_shrug.png"},
+    {"name": "Шраги (Гантели)", "primary_muscle": "traps", "equipment": "dumbbell", "exercise_type": "strength", "file": "hq_shrug.png"},
+    {"name": "Сгибание Молоток (Гантель)", "primary_muscle": "arms", "equipment": "dumbbell", "exercise_type": "strength", "file": "hq_hammer.png"},
+    {"name": "Тяга к подбородку", "primary_muscle": "shoulders", "equipment": "barbell", "exercise_type": "strength", "file": "hq_upright.png"},
+    {"name": "Жим ногами (Тренажёр)", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "hq_legpress.png"},
+    {"name": "Жим ногами (Тренажер)", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "hq_legpress.png"},
+    {"name": "Жимы ногами", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "hq_legpress.png"},
+    {"name": "Сгибание ног лежа (Тренажёр)", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "hq_legcurl.png"},
+    {"name": "Сгибание ног лежа", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "hq_legcurl.png"},
+    {"name": "Разгибание ног (Тренажёр)", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "hq_legext.png"},
+    {"name": "Разгибание ног", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "hq_legext.png"},
+    {"name": "Подъем носков стоя (Тренажёр)", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "hq_calf.png"},
+    {"name": "Подъем на носки", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "hq_calf.png"},
+    {"name": "Подъем носков стоя", "primary_muscle": "legs", "equipment": "machine", "exercise_type": "strength", "file": "hq_calf.png"},
+    {"name": "Жим гантелей сидя", "primary_muscle": "shoulders", "equipment": "dumbbell", "exercise_type": "strength", "file": "hq_shoulder.png"},
 ]
+
+
+async def _apply_photo(exercise_id: int, src: Path) -> str:
+    dest_dir = media_root() / "exercises" / str(exercise_id)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"figma_{src.name}"
+    shutil.copyfile(src, dest)
+    url = public_url(f"exercises/{exercise_id}/{dest.name}")
+    await execute(
+        "UPDATE exercises SET photo_url = $2, photo_urls = $3 WHERE id = $1",
+        exercise_id,
+        url,
+        [url],
+    )
+    return url
 
 
 async def _upsert(item: dict) -> int:
@@ -45,6 +72,17 @@ async def _upsert(item: dict) -> int:
         "SELECT id FROM exercises WHERE name = $1 AND is_public = TRUE AND owner_id IS NULL LIMIT 1",
         item["name"],
     )
+    if existing is None:
+        # Fuzzy: same public catalog title with slight punctuation differences.
+        existing = await fetchrow(
+            """
+            SELECT id FROM exercises
+            WHERE is_public = TRUE AND owner_id IS NULL
+              AND lower(name) = lower($1)
+            LIMIT 1
+            """,
+            item["name"],
+        )
     if existing:
         exercise_id = int(existing["id"])
     else:
@@ -69,19 +107,46 @@ async def _upsert(item: dict) -> int:
         print(f"  skip media (missing {src.name})")
         return exercise_id
 
-    dest_dir = media_root() / "exercises" / str(exercise_id)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / f"figma_{src.name}"
-    shutil.copyfile(src, dest)
-    url = public_url(f"exercises/{exercise_id}/{dest.name}")
-    await execute(
-        "UPDATE exercises SET photo_url = $2, photo_urls = $3 WHERE id = $1",
-        exercise_id,
-        url,
-        [url],
-    )
+    url = await _apply_photo(exercise_id, src)
     print(f"  #{exercise_id} {item['name']} → {url}")
     return exercise_id
+
+
+async def _refresh_matching_photos() -> None:
+    """Push HQ art onto any catalog exercise whose name contains the Figma title stem."""
+    stems: list[tuple[str, str]] = [
+        ("разминк", "hq_warm.png"),
+        ("жим лежа", "hq_bench.png"),
+        ("бабочк", "hq_butterfly.png"),
+        ("трицепс", "hq_tricep.png"),
+        ("вертикальн", "hq_lat.png"),
+        ("нижнего блока", "hq_row.png"),
+        ("шраг", "hq_shrug.png"),
+        ("молоток", "hq_hammer.png"),
+        ("подбородк", "hq_upright.png"),
+        ("жим нога", "hq_legpress.png"),
+        ("жимы нога", "hq_legpress.png"),
+        ("сгибание ног", "hq_legcurl.png"),
+        ("разгибание ног", "hq_legext.png"),
+        ("носк", "hq_calf.png"),
+        ("жим с плеч", "hq_shoulder.png"),
+        ("жим гантелей сидя", "hq_shoulder.png"),
+    ]
+    for stem, file_name in stems:
+        src = ASSETS / file_name
+        if not src.exists():
+            continue
+        rows = await fetch(
+            """
+            SELECT id, name FROM exercises
+            WHERE is_public = TRUE
+              AND lower(name) LIKE '%' || $1 || '%'
+            """,
+            stem.lower(),
+        )
+        for row in rows:
+            url = await _apply_photo(int(row["id"]), src)
+            print(f"  match #{row['id']} {row['name']} → {url}")
 
 
 async def _seed_program(exercise_ids: dict[str, int]) -> None:
@@ -190,6 +255,8 @@ async def main() -> None:
         print("Seeding Figma exercises…")
         for item in EXERCISES:
             ids[item["name"]] = await _upsert(item)
+        print("Refreshing matching catalog photos…")
+        await _refresh_matching_photos()
         await _seed_program(ids)
         print("Done.")
     finally:

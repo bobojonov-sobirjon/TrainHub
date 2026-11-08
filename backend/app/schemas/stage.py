@@ -203,6 +203,10 @@ class CalendarIn(BaseModel):
     )
 
 
+class SessionClientIn(BaseModel):
+    client_id: int = Field(description="ID клиента тренера", examples=[12])
+
+
 class SetIn(BaseModel):
     model_config = ConfigDict(json_schema_extra={"examples": [{"weight_kg": "60.0", "reps": 10, "is_warmup": False}]})
 

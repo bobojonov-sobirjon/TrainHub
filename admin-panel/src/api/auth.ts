@@ -13,6 +13,13 @@ export async function logout(refreshToken: string) {
   await api.post("/auth/logout", { refresh_token: refreshToken });
 }
 
+export async function changePassword(oldPassword: string, newPassword: string) {
+  await api.post("/auth/change-password", {
+    old_password: oldPassword,
+    new_password: newPassword,
+  });
+}
+
 export async function getMe() {
   const { data } = await api.get<SuccessResponse<UserPublic>>("/me");
   return data.data;

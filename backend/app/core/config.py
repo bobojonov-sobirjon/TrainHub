@@ -41,7 +41,8 @@ class Settings(BaseSettings):
     admin_origins: str = "http://localhost:5173"
 
     seed_admin_email: str = "admin@trainhub.local"
-    seed_admin_password: str = "ChangeMeAdmin1"
+    seed_admin_username: str = "admin"
+    seed_admin_password: str = "admin2026"
 
     google_client_ids: str = ""
     apple_bundle_ids: str = ""

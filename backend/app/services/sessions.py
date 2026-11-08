@@ -339,7 +339,8 @@ async def get_session(session_id: int, actor_id: int, is_trainer: bool) -> dict:
             raise AppError("FORBIDDEN", "Это не ваша тренировка", http_status=403)
     exercises = await fetch(
         """
-        SELECT se.id, se.exercise_id, se.sort_order, se.rest_sec, se.status, e.name, e.primary_muscle
+        SELECT se.id, se.exercise_id, se.sort_order, se.rest_sec, se.status,
+               e.name, e.primary_muscle, e.photo_url
         FROM session_exercises se
         JOIN exercises e ON e.id = se.exercise_id
         WHERE se.session_id = $1
@@ -405,7 +406,73 @@ async def get_session(session_id: int, actor_id: int, is_trainer: bool) -> dict:
     data["exercises"] = items
     data["sets_count"] = sum(len(ex.get("sets") or []) for ex in items)
     data["exercises_count"] = len(items)
+    participants = await fetch(
+        """
+        SELECT u.id, u.first_name, u.last_name, u.avatar_url
+        FROM users u
+        WHERE u.id IN (
+            SELECT client_id FROM workout_session_clients WHERE session_id = $1
+            UNION
+            SELECT lead_client_id FROM workout_sessions WHERE id = $1 AND lead_client_id IS NOT NULL
+        )
+        ORDER BY (u.id = $2) DESC, u.first_name
+        """,
+        session_id,
+        data.get("lead_client_id"),
+    )
+    data["clients"] = [dict(p) for p in participants]
     return data
+
+
+async def add_client(session_id: int, actor_id: int, is_trainer: bool, client_id: int) -> dict:
+    if not is_trainer:
+        raise AppError("FORBIDDEN", "Добавлять клиентов может только тренер", http_status=403)
+    session = await get_session(session_id, actor_id, is_trainer)
+    if session.get("status") != "in_progress":
+        raise AppError("SESSION_NOT_ACTIVE", "Тренировка уже завершена", http_status=409)
+    linked = await fetchrow(
+        """
+        SELECT 1 FROM trainer_clients
+        WHERE trainer_id = $1 AND client_id = $2 AND archived_at IS NULL
+        """,
+        actor_id,
+        client_id,
+    )
+    if linked is None:
+        raise AppError("FORBIDDEN", "Это не ваш клиент", http_status=403)
+    async with transaction() as conn:
+        await conn.execute(
+            "INSERT INTO workout_session_clients (session_id, client_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+            session_id,
+            client_id,
+        )
+        await conn.execute(
+            "UPDATE workout_sessions SET lead_client_id = COALESCE(lead_client_id, $2) WHERE id = $1",
+            session_id,
+            client_id,
+        )
+    await _touch_activity(session_id)
+    return await get_session(session_id, actor_id, is_trainer)
+
+
+async def delete_set(session_id: int, set_id: int, actor_id: int, is_trainer: bool) -> dict:
+    await get_session(session_id, actor_id, is_trainer)
+    row = await fetchrow(
+        """
+        DELETE FROM session_sets ss
+        USING session_exercises se
+        WHERE ss.id = $1
+          AND se.id = ss.session_exercise_id
+          AND se.session_id = $2
+        RETURNING ss.id
+        """,
+        set_id,
+        session_id,
+    )
+    if row is None:
+        raise AppError("SET_NOT_FOUND", "Подход не найден", http_status=404)
+    await _touch_activity(session_id)
+    return await get_session(session_id, actor_id, is_trainer)
 
 
 async def add_exercise(
@@ -458,6 +525,36 @@ async def delete_exercise(session_id: int, se_id: int, actor_id: int, is_trainer
     )
     if row is None:
         raise AppError("SESSION_EXERCISE_NOT_FOUND", "Упражнение сессии не найдено", http_status=404)
+    return await get_session(session_id, actor_id, is_trainer)
+
+
+async def complete_exercise(session_id: int, se_id: int, actor_id: int, is_trainer: bool) -> dict:
+    """Mark one session exercise as done without finishing the whole workout."""
+    await get_session(session_id, actor_id, is_trainer)
+    row = await fetchrow(
+        """
+        UPDATE session_exercises
+        SET status = 'done'
+        WHERE id = $1 AND session_id = $2
+        RETURNING id, status
+        """,
+        se_id,
+        session_id,
+    )
+    if row is None:
+        raise AppError("SESSION_EXERCISE_NOT_FOUND", "Упражнение сессии не найдено", http_status=404)
+    # Mark any still-open planned sets as completed with current values (if any).
+    await execute(
+        """
+        UPDATE session_sets
+        SET completed_at = COALESCE(completed_at, NOW())
+        WHERE session_exercise_id = $1
+          AND completed_at IS NULL
+          AND weight_kg IS NOT NULL
+        """,
+        se_id,
+    )
+    await _touch_activity(session_id)
     return await get_session(session_id, actor_id, is_trainer)
 
 

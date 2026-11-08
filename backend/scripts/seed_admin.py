@@ -25,7 +25,8 @@ async def seed_admin() -> None:
         if ROLE_ADMIN not in roles:
             await execute(sql("auth/insert_role.sql"), existing["id"], ROLE_ADMIN)
         print(f"Reset admin password for {email}")
-        print(f"Login: {email}")
+        print(f"Username: {settings.seed_admin_username}")
+        print(f"Login (email): {email}")
         print(f"Password: {settings.seed_admin_password}")
         await close_pool()
         return
@@ -43,7 +44,8 @@ async def seed_admin() -> None:
         )
         await conn.execute(sql("auth/insert_role.sql"), user["id"], ROLE_ADMIN)
     print(f"Seeded admin {email}")
-    print(f"Login: {email}")
+    print(f"Username: {settings.seed_admin_username}")
+    print(f"Login (email): {email}")
     print(f"Password: {settings.seed_admin_password}")
     await close_pool()
 

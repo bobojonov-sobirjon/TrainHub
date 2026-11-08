@@ -31,9 +31,15 @@ def _is_email(value: str) -> bool:
 
 
 async def _find_user_by_login(login: str) -> asyncpg.Record | None:
-    if _is_email(login):
-        return await fetchrow(sql("auth/get_user_by_email.sql"), login)
-    return await fetchrow(sql("auth/get_user_by_phone.sql"), login)
+    value = login.strip()
+    if _is_email(value):
+        return await fetchrow(sql("auth/get_user_by_email.sql"), value)
+    # Admin panel username alias → seeded admin email.
+    if value.lower() == (settings.seed_admin_username or "admin").strip().lower():
+        row = await fetchrow(sql("auth/get_user_by_email.sql"), settings.seed_admin_email)
+        if row is not None:
+            return row
+    return await fetchrow(sql("auth/get_user_by_phone.sql"), value)
 
 
 def _assert_can_login(row: asyncpg.Record, audience: Audience) -> None:

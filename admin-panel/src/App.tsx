@@ -20,6 +20,7 @@ import { TicketsPage } from "./pages/Tickets";
 import { TicketDetailPage } from "./pages/TicketDetail";
 import { LegalPage } from "./pages/Legal";
 import { LegalDetailPage } from "./pages/LegalDetail";
+import { SettingsPage } from "./pages/Settings";
 import { ProtectedRoute } from "./router";
 
 const queryClient = new QueryClient();
@@ -59,6 +60,7 @@ export function App() {
               <Route path="tickets/:id" element={<TicketDetailPage />} />
               <Route path="legal" element={<LegalPage />} />
               <Route path="legal/:docType" element={<LegalDetailPage />} />
+              <Route path="settings" element={<SettingsPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

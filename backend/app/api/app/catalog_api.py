@@ -16,6 +16,7 @@ from app.schemas.stage import (
     ProgramDayIn,
     ProgramWeekIn,
     ReorderDayExercisesIn,
+    SessionClientIn,
     SessionCreateIn,
     SessionExerciseIn,
     SetIn,
@@ -559,6 +560,20 @@ async def delete_ex(
 
 
 @router.post(
+    "/sessions/{session_id}/exercises/{se_id}/complete",
+    tags=["Shared - Sessions"],
+    summary="Завершить упражнение",
+    description="Помечает упражнение как выполненное. Всю тренировку не завершает.",
+)
+async def complete_ex(
+    session_id: int, se_id: int, user: Annotated[UserPublic, Depends(get_app_user)]
+) -> SuccessResponse[dict]:
+    return SuccessResponse(
+        data=await sess.complete_exercise(session_id, se_id, user.id, ROLE_TRAINER in user.roles)
+    )
+
+
+@router.post(
     "/sessions/{session_id}/exercises/{se_id}/sets",
     tags=["Shared - Sessions"],
     summary="Добавить подход",
@@ -611,6 +626,32 @@ async def patch_set(
 ) -> SuccessResponse[dict]:
     return SuccessResponse(
         data=await sess.patch_set(session_id, set_id, user.id, ROLE_TRAINER in user.roles, payload)
+    )
+
+
+@router.delete(
+    "/sessions/{session_id}/sets/{set_id}",
+    tags=["Shared - Sessions"],
+    summary="Удалить подход",
+    description="Удаляет подход текущей сессии.",
+)
+async def delete_set(
+    session_id: int, set_id: int, user: Annotated[UserPublic, Depends(get_app_user)]
+) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await sess.delete_set(session_id, set_id, user.id, ROLE_TRAINER in user.roles))
+
+
+@router.post(
+    "/sessions/{session_id}/clients",
+    tags=["Shared - Sessions"],
+    summary="Добавить клиента в тренировку",
+    description="Тренер добавляет своего клиента в текущую групповую тренировку.",
+)
+async def add_session_client(
+    session_id: int, payload: SessionClientIn, user: Annotated[UserPublic, Depends(get_app_user)]
+) -> SuccessResponse[dict]:
+    return SuccessResponse(
+        data=await sess.add_client(session_id, user.id, ROLE_TRAINER in user.roles, payload.client_id)
     )
 
 
