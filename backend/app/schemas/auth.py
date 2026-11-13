@@ -92,7 +92,11 @@ class GoogleAuthIn(BaseModel):
         description="Firebase ID token после Google Sign-In в Firebase Auth, либо native Google ID token",
         examples=["eyJhbGciOiJSUzI1NiIsImtpZCI6ImZpcmViYXNlLWlkIn0"],
     )
-    role: str = Field(default="client", description="Роль при первой регистрации: client или trainer", examples=["client"])
+    role: str | None = Field(
+        default=None,
+        description="Роль при первой регистрации: client или trainer. Без роли новый аккаунт не создаётся (ROLE_REQUIRED)",
+        examples=["client"],
+    )
 
 
 class AppleAuthIn(BaseModel):
@@ -115,7 +119,11 @@ class AppleAuthIn(BaseModel):
     )
     first_name: str | None = Field(default=None, description="Имя, Apple отдаёт только при первом входе", examples=["Иван"])
     last_name: str | None = Field(default=None, description="Фамилия при первом входе", examples=["Петров"])
-    role: str = Field(default="client", description="Роль при первой регистрации: client или trainer", examples=["client"])
+    role: str | None = Field(
+        default=None,
+        description="Роль при первой регистрации: client или trainer. Без роли новый аккаунт не создаётся (ROLE_REQUIRED)",
+        examples=["client"],
+    )
 
 
 class TelegramSendCodeIn(BaseModel):

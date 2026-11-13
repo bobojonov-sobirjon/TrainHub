@@ -22,8 +22,8 @@ APPLE_JWKS = PyJWKClient("https://appleid.apple.com/auth/keys")
 FIREBASE_ISS_PREFIX = "https://securetoken.google.com/"
 
 
-def _role_or_default(role: str) -> str:
-    if role not in APP_ROLES:
+def _role_or_default(role: str | None) -> str | None:
+    if role is not None and role not in APP_ROLES:
         raise AppError("VALIDATION_ERROR", "Роль должна быть client или trainer", http_status=422)
     return role
 
@@ -37,7 +37,7 @@ async def _login_or_register(
     first_name: str,
     last_name: str,
     avatar_url: str | None,
-    role: str,
+    role: str | None,
 ) -> TokenPair:
     role = _role_or_default(role)
     linked = await fetchrow(
@@ -72,6 +72,9 @@ async def _login_or_register(
         )
         _assert_can_login_social(existing)
         return await _issue_tokens(existing, AUD_APP)
+
+    if role is None:
+        raise AppError("ROLE_REQUIRED", "Выберите, кто вы: клиент или тренер", http_status=409)
 
     async with transaction() as conn:
         user = await conn.fetchrow(
