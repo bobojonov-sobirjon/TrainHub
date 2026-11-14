@@ -125,3 +125,32 @@ async def test_stage3_clients_measurements_notes_stats_requests(client: AsyncCli
         headers=_auth(person),
     )
     assert duplicate.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_manual_client_attaches_existing_email(client: AsyncClient) -> None:
+    trainer = await _register(client, "trainer", "Coach")
+    person = await _register(client, "client", "Anna")
+    email = person["user"]["email"]
+
+    first = await client.post(
+        "/api/v1/app/trainer/clients/manual",
+        headers=_auth(trainer),
+        json={"first_name": "Anna", "email": email, "phone": f"+7910{uuid.uuid4().int % 10_000_000:07d}"},
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["data"]["client_id"] == person["user"]["id"]
+
+    again = await client.post(
+        "/api/v1/app/trainer/clients/manual",
+        headers=_auth(trainer),
+        json={"first_name": "Anna", "email": email},
+    )
+    assert again.status_code == 409
+
+    self_add = await client.post(
+        "/api/v1/app/trainer/clients/manual",
+        headers=_auth(trainer),
+        json={"first_name": "Me", "email": trainer["user"]["email"]},
+    )
+    assert self_add.status_code == 422

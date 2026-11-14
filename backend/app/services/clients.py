@@ -2,7 +2,14 @@ from datetime import date
 
 import asyncpg
 
-from app.core.constants import CLIENT_SORT, CLIENT_STATUSES, FREE_CLIENT_LIMIT, MEASUREMENT_METRICS, REQUEST_STATUSES
+from app.core.constants import (
+    ALLOWED_GENDERS,
+    CLIENT_SORT,
+    CLIENT_STATUSES,
+    FREE_CLIENT_LIMIT,
+    MEASUREMENT_METRICS,
+    REQUEST_STATUSES,
+)
 from app.core.exceptions import AppError
 from app.core.security import hash_password
 from app.db.connection import execute, fetch, fetchrow
@@ -11,6 +18,13 @@ from app.db.transactions import transaction
 from app.schemas.stage import ClientManualIn, MeasurementIn
 from app.services.notify import create_notification
 from app.services.sessions import strength_progress
+
+
+def _blank(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    return text or None
 
 
 async def _has_trainer_pro(user_id: int) -> bool:
@@ -162,55 +176,114 @@ async def add_existing(trainer_id: int, user_id: int) -> dict:
 
 
 async def add_manual(trainer_id: int, payload: ClientManualIn) -> dict:
-    if not payload.email and not payload.phone:
+    email = _blank(payload.email)
+    phone = _blank(payload.phone)
+    if not email and not phone:
         raise AppError("VALIDATION_ERROR", "Укажите email или телефон", http_status=422)
+    gender = payload.gender if payload.gender in ALLOWED_GENDERS else None
     await _assert_client_limit(trainer_id)
-    async with transaction() as conn:
-        user = await conn.fetchrow(
-            sql("auth/insert_user.sql"),
-            payload.email,
-            payload.phone,
-            hash_password("ShadowUser12"),
-            payload.first_name.strip(),
-            payload.last_name.strip(),
-            payload.gender,
-            payload.birth_date,
+
+    by_email = None
+    by_phone = None
+    if email:
+        by_email = await fetchrow("SELECT id FROM users WHERE lower(email) = lower($1)", email)
+    if phone:
+        by_phone = await fetchrow("SELECT id FROM users WHERE phone = $1", phone)
+    if by_email and by_phone and by_email["id"] != by_phone["id"]:
+        raise AppError(
+            "VALIDATION_ERROR",
+            "Email и телефон принадлежат разным пользователям",
+            http_status=422,
         )
-        await conn.execute(
-            "UPDATE users SET is_shadow = TRUE WHERE id = $1",
-            user["id"],
-        )
-        await conn.execute(sql("auth/insert_role.sql"), user["id"], "client")
-        link = await conn.fetchrow(
-            """
-            INSERT INTO trainer_clients (trainer_id, client_id, status, training_format, goals, invited_via)
-            VALUES ($1, $2, 'new', $3, $4, 'manual')
-            RETURNING id
-            """,
-            trainer_id,
-            user["id"],
-            payload.training_format,
-            payload.goals,
-        )
-        if payload.measurements:
-            await _insert_measurement(conn, user["id"], trainer_id, payload.measurements)
-        for note in payload.notes:
-            await conn.execute(
+    existing_id = int((by_email or by_phone)["id"]) if (by_email or by_phone) else None
+    if existing_id == trainer_id:
+        raise AppError("VALIDATION_ERROR", "Нельзя добавить себя в список клиентов", http_status=422)
+
+    notes = [item.strip() for item in payload.notes if item and item.strip()]
+    limits = [item.strip() for item in payload.contraindications if item and item.strip()]
+
+    try:
+        async with transaction() as conn:
+            if existing_id:
+                user_id = existing_id
+                await conn.execute(sql("auth/insert_role.sql"), user_id, "client")
+            else:
+                user = await conn.fetchrow(
+                    sql("auth/insert_user.sql"),
+                    email,
+                    phone,
+                    hash_password("ShadowUser12"),
+                    payload.first_name.strip(),
+                    payload.last_name.strip(),
+                    gender,
+                    payload.birth_date,
+                )
+                await conn.execute("UPDATE users SET is_shadow = TRUE WHERE id = $1", user["id"])
+                await conn.execute(sql("auth/insert_role.sql"), user["id"], "client")
+                user_id = user["id"]
+
+            link = await conn.fetchrow(
                 """
-                INSERT INTO trainer_notes (trainer_client_id, text, created_by)
-                VALUES ($1, $2, $3)
+                SELECT id, archived_at FROM trainer_clients
+                WHERE trainer_id = $1 AND client_id = $2
                 """,
-                link["id"],
-                note,
                 trainer_id,
+                user_id,
             )
-        for item in payload.contraindications:
-            await conn.execute(
-                "INSERT INTO contraindications (trainer_client_id, text) VALUES ($1, $2)",
-                link["id"],
-                item,
-            )
-    return await get_client(trainer_id, link["id"])
+            if link and link["archived_at"] is None:
+                raise AppError("ALREADY_ADDED", "Клиент уже добавлен", http_status=409)
+            if link:
+                await conn.execute(
+                    """
+                    UPDATE trainer_clients
+                    SET archived_at = NULL, status = 'new', training_format = $2, goals = $3, invited_via = 'manual'
+                    WHERE id = $1
+                    """,
+                    link["id"],
+                    payload.training_format,
+                    payload.goals,
+                )
+                link_id = link["id"]
+            else:
+                created = await conn.fetchrow(
+                    """
+                    INSERT INTO trainer_clients (trainer_id, client_id, status, training_format, goals, invited_via)
+                    VALUES ($1, $2, 'new', $3, $4, 'manual')
+                    RETURNING id
+                    """,
+                    trainer_id,
+                    user_id,
+                    payload.training_format,
+                    payload.goals,
+                )
+                link_id = created["id"]
+            if payload.measurements:
+                await _insert_measurement(conn, user_id, trainer_id, payload.measurements)
+            for note in notes:
+                await conn.execute(
+                    """
+                    INSERT INTO trainer_notes (trainer_client_id, text, created_by)
+                    VALUES ($1, $2, $3)
+                    """,
+                    link_id,
+                    note,
+                    trainer_id,
+                )
+            for item in limits:
+                await conn.execute(
+                    "INSERT INTO contraindications (trainer_client_id, text) VALUES ($1, $2)",
+                    link_id,
+                    item,
+                )
+    except AppError:
+        raise
+    except asyncpg.UniqueViolationError:
+        raise AppError(
+            "USER_EXISTS",
+            "Пользователь с таким email или телефоном уже есть. Найдите его через поиск.",
+            http_status=409,
+        ) from None
+    return await get_client(trainer_id, link_id)
 
 
 async def _insert_measurement(conn, client_id: int, recorded_by: int, m: MeasurementIn) -> None:
@@ -218,8 +291,9 @@ async def _insert_measurement(conn, client_id: int, recorded_by: int, m: Measure
         """
         INSERT INTO body_measurements (
             client_id, recorded_by, weight_kg, body_fat_pct, muscle_mass_kg, water_pct,
-            chest_cm, back_cm, waist_cm, hips_cm, thigh_cm, calf_cm, neck_cm, shoulders_cm, arm_cm, forearm_cm
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+            chest_cm, back_cm, waist_cm, hips_cm, thigh_cm, calf_cm, neck_cm, shoulders_cm,
+            arm_cm, arm_left_cm, arm_right_cm, forearm_cm
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
         """,
         client_id,
         recorded_by,
@@ -236,6 +310,8 @@ async def _insert_measurement(conn, client_id: int, recorded_by: int, m: Measure
         m.neck_cm,
         m.shoulders_cm,
         m.arm_cm,
+        m.arm_left_cm,
+        m.arm_right_cm,
         m.forearm_cm,
     )
 
