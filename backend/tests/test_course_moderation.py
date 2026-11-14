@@ -202,3 +202,44 @@ async def test_admin_approve_reject_and_assign(client: AsyncClient) -> None:
     assert mine.status_code == 200, mine.text
     titles = {item.get("title") for item in mine.json()["data"]}
     assert "Персональный план" in titles
+
+
+@pytest.mark.asyncio
+async def test_program_without_cover_can_be_published_and_listed(client: AsyncClient) -> None:
+    trainer = await _register(client, "trainer")
+    person = await _register(client, "client")
+    t = _auth(trainer)
+    c = _auth(person)
+
+    exercises = await client.get("/api/v1/app/exercises", headers=c)
+    exercise_id = exercises.json()["data"][0]["id"]
+
+    created = await client.post(
+        "/api/v1/app/programs",
+        headers=t,
+        json={"title": "Без обложки", "status": "draft"},
+    )
+    assert created.status_code == 200, created.text
+    program_id = created.json()["data"]["id"]
+    assert created.json()["data"]["cover_url"] is None
+
+    day = await client.post(f"/api/v1/app/programs/{program_id}/days", headers=t, json={"title": "День 1"})
+    day_id = day.json()["data"]["days"][0]["id"]
+    added = await client.post(
+        f"/api/v1/app/programs/{program_id}/days/{day_id}/exercises",
+        headers=t,
+        json={"exercise_id": exercise_id, "sets": 3, "reps_min": 8, "reps_max": 10},
+    )
+    assert added.status_code == 200, added.text
+
+    submit = await client.post(f"/api/v1/app/programs/{program_id}/submit", headers=t)
+    assert submit.status_code == 200, submit.text
+    assert submit.json()["data"]["status"] == "published"
+
+    listed = await client.get("/api/v1/app/programs", headers=c)
+    item = next(i for i in listed.json()["data"]["items"] if i["id"] == program_id)
+    assert item["cover_url"] is None
+
+    detail = await client.get(f"/api/v1/app/programs/{program_id}", headers=c)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["data"]["cover_url"] is None

@@ -890,9 +890,6 @@ async def submit_program_for_review(user_id: int, program_id: int) -> dict:
     )
     if not exercises or int(exercises["n"]) < 1:
         raise AppError("VALIDATION_ERROR", "Добавьте хотя бы одно упражнение", http_status=400)
-    cover = await fetchrow("SELECT cover_url FROM programs WHERE id = $1", program_id)
-    if cover is None or not (cover.get("cover_url") or "").strip():
-        raise AppError("VALIDATION_ERROR", "Добавьте обложку программы", http_status=400)
     if status == "published":
         return await get_program(program_id, user_id)
     await execute(

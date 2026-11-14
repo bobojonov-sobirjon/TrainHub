@@ -32,6 +32,48 @@ def _active_duration_sql(alias: str = "") -> str:
     )
 
 
+def owned_by(alias: str, client_param: str) -> str:
+    """Session exercise belongs to the client: own rows plus shared (client_id NULL) ones."""
+    return f"({alias}.client_id IS NULL OR {alias}.client_id = {client_param})"
+
+
+async def _seed_program_day(conn, session_id: int, program_day_id: int, client_id: int | None) -> None:
+    """Copies the program day's exercises (with planned sets) into the session for one client."""
+    day_ex = await conn.fetch(
+        """
+        SELECT exercise_id, sort_order, sets, reps_min, reps_max, rest_sec
+        FROM program_day_exercises
+        WHERE program_day_id = $1
+        ORDER BY sort_order, id
+        """,
+        program_day_id,
+    )
+    for idx, ex in enumerate(day_ex, start=1):
+        se = await conn.fetchrow(
+            """
+            INSERT INTO session_exercises (session_id, exercise_id, sort_order, rest_sec, client_id)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
+            """,
+            session_id,
+            ex["exercise_id"],
+            ex["sort_order"] if ex["sort_order"] is not None else idx,
+            ex["rest_sec"],
+            client_id,
+        )
+        planned_sets = int(ex["sets"] or 0)
+        for set_i in range(1, max(planned_sets, 0) + 1):
+            await conn.execute(
+                """
+                INSERT INTO session_sets (session_exercise_id, set_index, reps, is_warmup)
+                VALUES ($1, $2, $3, FALSE)
+                """,
+                se["id"],
+                set_i,
+                ex["reps_max"] or ex["reps_min"],
+            )
+
+
 async def abandon_session(session_id: int, *, reason: str = "inactivity") -> dict | None:
     row = await fetchrow(
         f"""
@@ -256,42 +298,13 @@ async def create_session(actor_id: int, is_trainer: bool, payload: SessionCreate
             )
         # Seed session exercises from program day (reuse exercise ids, no duplicates of catalog).
         if program_day_id is not None:
-            day_ex = await conn.fetch(
-                """
-                SELECT exercise_id, sort_order, sets, reps_min, reps_max, rest_sec
-                FROM program_day_exercises
-                WHERE program_day_id = $1
-                ORDER BY sort_order, id
-                """,
-                program_day_id,
-            )
-            for idx, ex in enumerate(day_ex, start=1):
-                se = await conn.fetchrow(
-                    """
-                    INSERT INTO session_exercises (session_id, exercise_id, sort_order, rest_sec)
-                    VALUES ($1, $2, $3, $4)
-                    RETURNING id
-                    """,
-                    row["id"],
-                    ex["exercise_id"],
-                    ex["sort_order"] if ex["sort_order"] is not None else idx,
-                    ex["rest_sec"],
-                )
-                planned_sets = int(ex["sets"] or 0)
-                for set_i in range(1, max(planned_sets, 0) + 1):
-                    await conn.execute(
-                        """
-                        INSERT INTO session_sets (session_exercise_id, set_index, reps, is_warmup)
-                        VALUES ($1, $2, $3, FALSE)
-                        """,
-                        se["id"],
-                        set_i,
-                        ex["reps_max"] or ex["reps_min"],
-                    )
+            for owner in list(dict.fromkeys(clients)) or [None]:
+                await _seed_program_day(conn, row["id"], program_day_id, owner)
     return await get_session(row["id"], actor_id, is_trainer)
 
 
-async def get_session(session_id: int, actor_id: int, is_trainer: bool) -> dict:
+async def get_session(session_id: int, actor_id: int, is_trainer: bool, client_id: int | None = None) -> dict:
+    """`client_id` narrows exercises to one participant; a client always sees only own ones."""
     row = await fetchrow("SELECT * FROM workout_sessions WHERE id = $1", session_id)
     if row is None:
         raise AppError("SESSION_NOT_FOUND", "Тренировка не найдена", http_status=404)
@@ -337,16 +350,19 @@ async def get_session(session_id: int, actor_id: int, is_trainer: bool) -> dict:
         )
         if member is None:
             raise AppError("FORBIDDEN", "Это не ваша тренировка", http_status=403)
+    owner = actor_id if not is_trainer else client_id
     exercises = await fetch(
-        """
-        SELECT se.id, se.exercise_id, se.sort_order, se.rest_sec, se.status,
+        f"""
+        SELECT se.id, se.exercise_id, se.sort_order, se.rest_sec, se.status, se.client_id,
                e.name, e.primary_muscle, e.photo_url
         FROM session_exercises se
         JOIN exercises e ON e.id = se.exercise_id
         WHERE se.session_id = $1
+          AND ($2::BIGINT IS NULL OR {owned_by("se", "$2")})
         ORDER BY se.sort_order, se.id
         """,
         session_id,
+        owner,
     )
     data = dict(row)
     if data.get("trainer_id"):
@@ -376,9 +392,10 @@ async def get_session(session_id: int, actor_id: int, is_trainer: bool) -> dict:
             if w is None:
                 continue
             max_w = float(w) if max_w is None else max(max_w, float(w))
-        if max_w is not None and data.get("lead_client_id"):
+        ex_owner = ex.get("client_id") or data.get("lead_client_id")
+        if max_w is not None and ex_owner:
             prev = await fetchrow(
-                """
+                f"""
                 SELECT MAX(ss.weight_kg) AS max_w
                 FROM session_sets ss
                 JOIN session_exercises se ON se.id = ss.session_exercise_id
@@ -388,6 +405,7 @@ async def get_session(session_id: int, actor_id: int, is_trainer: bool) -> dict:
                   AND ws.id <> $2
                   AND ss.is_warmup = FALSE
                   AND ss.weight_kg IS NOT NULL
+                  AND {owned_by("se", "$3")}
                   AND (
                       ws.lead_client_id = $3
                       OR EXISTS (
@@ -398,7 +416,7 @@ async def get_session(session_id: int, actor_id: int, is_trainer: bool) -> dict:
                 """,
                 ex["exercise_id"],
                 session_id,
-                data["lead_client_id"],
+                ex_owner,
             )
             if prev and prev["max_w"] is not None:
                 item["weight_delta_kg"] = round(max_w - float(prev["max_w"]), 1)
@@ -440,12 +458,24 @@ async def add_client(session_id: int, actor_id: int, is_trainer: bool, client_id
     )
     if linked is None:
         raise AppError("FORBIDDEN", "Это не ваш клиент", http_status=403)
+    participants = {int(c["id"]) for c in session.get("clients") or []}
+    if client_id in participants:
+        return session
     async with transaction() as conn:
         await conn.execute(
             "INSERT INTO workout_session_clients (session_id, client_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
             session_id,
             client_id,
         )
+        if not participants:
+            # A solo trainer workout becomes this client's workout.
+            await conn.execute(
+                "UPDATE session_exercises SET client_id = $2 WHERE session_id = $1 AND client_id IS NULL",
+                session_id,
+                client_id,
+            )
+        elif session.get("program_day_id"):
+            await _seed_program_day(conn, session_id, int(session["program_day_id"]), client_id)
         await conn.execute(
             "UPDATE workout_sessions SET lead_client_id = COALESCE(lead_client_id, $2) WHERE id = $1",
             session_id,
@@ -483,18 +513,28 @@ async def add_exercise(
     rest_sec: int | None,
     sets: int | None = None,
     reps: int | None = None,
+    client_id: int | None = None,
 ) -> dict:
-    await get_session(session_id, actor_id, is_trainer)
+    session = await get_session(session_id, actor_id, is_trainer)
+    if not is_trainer:
+        owner = actor_id
+    elif client_id is not None:
+        if client_id not in {int(c["id"]) for c in session.get("clients") or []}:
+            raise AppError("CLIENT_NOT_IN_SESSION", "Клиент не участвует в этой тренировке", http_status=400)
+        owner = client_id
+    else:
+        owner = session.get("lead_client_id")
     async with transaction() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO session_exercises (session_id, exercise_id, sort_order, rest_sec)
-            VALUES ($1, $2, COALESCE((SELECT MAX(sort_order)+1 FROM session_exercises WHERE session_id = $1), 1), $3)
+            INSERT INTO session_exercises (session_id, exercise_id, sort_order, rest_sec, client_id)
+            VALUES ($1, $2, COALESCE((SELECT MAX(sort_order)+1 FROM session_exercises WHERE session_id = $1), 1), $3, $4)
             RETURNING id
             """,
             session_id,
             exercise_id,
             rest_sec,
+            owner,
         )
         # Same as program-day start: seed planned sets so live UI matches trainer workouts.
         planned_sets = int(sets or 0)
@@ -689,7 +729,7 @@ async def previous_sets(
         if linked is None:
             raise AppError("FORBIDDEN", "Нет доступа к результатам клиента", http_status=403)
     rows = await fetch(
-        """
+        f"""
         WITH last AS (
             SELECT ws.id
             FROM workout_sessions ws
@@ -697,6 +737,7 @@ async def previous_sets(
             WHERE se.exercise_id = $1
               AND ws.status = 'completed'
               AND ws.id <> $2
+              AND {owned_by("se", "$3")}
               AND (
                   ws.lead_client_id = $3
                   OR EXISTS (
@@ -710,7 +751,7 @@ async def previous_sets(
         SELECT ss.weight_kg, ss.reps, ss.set_index, ss.is_warmup, ws.finished_at
         FROM last
         JOIN workout_sessions ws ON ws.id = last.id
-        JOIN session_exercises se ON se.session_id = last.id AND se.exercise_id = $1
+        JOIN session_exercises se ON se.session_id = last.id AND se.exercise_id = $1 AND {owned_by("se", "$3")}
         JOIN session_sets ss ON ss.session_exercise_id = se.id
         ORDER BY ss.set_index, ss.id
         """,
@@ -750,7 +791,7 @@ async def volume_progress(client_id: int, *, days: int = 30) -> dict:
     """Daily tonnage (weight×reps) + per-exercise volume for the last N days."""
     days = max(7, min(int(days or 30), 90))
     daily = await fetch(
-        """
+        f"""
         SELECT COALESCE(ws.finished_at, ws.started_at, ws.created_at)::date AS day,
                COALESCE(SUM(ss.weight_kg * ss.reps) FILTER (WHERE ss.is_warmup = FALSE), 0) AS volume_kg
         FROM workout_sessions ws
@@ -758,6 +799,7 @@ async def volume_progress(client_id: int, *, days: int = 30) -> dict:
         JOIN session_sets ss ON ss.session_exercise_id = se.id
         WHERE ws.status = 'completed'
           AND COALESCE(ws.finished_at, ws.started_at, ws.created_at) >= CURRENT_DATE - ($2 * INTERVAL '1 day')
+          AND {owned_by("se", "$1")}
           AND (
               ws.lead_client_id = $1
               OR EXISTS (
@@ -772,7 +814,7 @@ async def volume_progress(client_id: int, *, days: int = 30) -> dict:
         days,
     )
     by_exercise = await fetch(
-        """
+        f"""
         SELECT e.id AS exercise_id,
                e.name,
                COALESCE(SUM(ss.weight_kg * ss.reps) FILTER (WHERE ss.is_warmup = FALSE), 0) AS volume_kg,
@@ -784,6 +826,7 @@ async def volume_progress(client_id: int, *, days: int = 30) -> dict:
         JOIN exercises e ON e.id = se.exercise_id
         WHERE ws.status = 'completed'
           AND COALESCE(ws.finished_at, ws.started_at, ws.created_at) >= CURRENT_DATE - ($2 * INTERVAL '1 day')
+          AND {owned_by("se", "$1")}
           AND (
               ws.lead_client_id = $1
               OR EXISTS (
@@ -826,7 +869,7 @@ async def volume_progress(client_id: int, *, days: int = 30) -> dict:
 
 async def strength_progress(client_id: int) -> list[dict]:
     last_rows = await fetch(
-        """
+        f"""
         SELECT DISTINCT ON (se.exercise_id)
             se.exercise_id,
             e.name,
@@ -839,6 +882,7 @@ async def strength_progress(client_id: int) -> list[dict]:
         JOIN exercises e ON e.id = se.exercise_id
         WHERE ws.status = 'completed'
           AND ss.is_warmup = FALSE
+          AND {owned_by("se", "$1")}
           AND (
               ws.lead_client_id = $1
               OR EXISTS (
@@ -851,7 +895,7 @@ async def strength_progress(client_id: int) -> list[dict]:
         client_id,
     )
     best_rows = await fetch(
-        """
+        f"""
         SELECT
             se.exercise_id,
             MAX(ss.weight_kg) FILTER (WHERE ss.is_warmup = FALSE) AS best_weight_kg,
@@ -860,6 +904,7 @@ async def strength_progress(client_id: int) -> list[dict]:
         JOIN session_exercises se ON se.session_id = ws.id
         JOIN session_sets ss ON ss.session_exercise_id = se.id
         WHERE ws.status = 'completed'
+          AND {owned_by("se", "$1")}
           AND (
               ws.lead_client_id = $1
               OR EXISTS (
@@ -922,7 +967,7 @@ async def client_sessions(
             f"""EXISTS (
                 SELECT 1 FROM session_exercises se
                 JOIN exercises e ON e.id = se.exercise_id
-                WHERE se.session_id = s.id
+                WHERE se.session_id = s.id AND (se.client_id IS NULL OR se.client_id = $1)
                   AND (e.primary_muscle = ${len(args)} OR ${len(args)} = ANY(e.secondary_muscles))
             )"""
         )
@@ -949,7 +994,7 @@ async def client_sessions(
                 EXISTS (
                     SELECT 1 FROM session_exercises se
                     JOIN exercises e ON e.id = se.exercise_id
-                    WHERE se.session_id = s.id AND e.name ILIKE ${len(args)}
+                    WHERE se.session_id = s.id AND (se.client_id IS NULL OR se.client_id = $1) AND e.name ILIKE ${len(args)}
                 )
                 OR EXISTS (SELECT 1 FROM unnest(s.kinds) k WHERE k ILIKE ${len(args)})
             )"""
@@ -959,13 +1004,14 @@ async def client_sessions(
             """EXISTS (
                 SELECT 1 FROM session_sets ss
                 JOIN session_exercises se ON se.id = ss.session_exercise_id
-                WHERE se.session_id = s.id AND ss.weight_kg IS NOT NULL
+                WHERE se.session_id = s.id AND (se.client_id IS NULL OR se.client_id = $1) AND ss.weight_kg IS NOT NULL
                   AND ss.weight_kg >= COALESCE((
                       SELECT MAX(ss2.weight_kg)
                       FROM session_sets ss2
                       JOIN session_exercises se2 ON se2.id = ss2.session_exercise_id
                       JOIN workout_sessions ws2 ON ws2.id = se2.session_id
                       WHERE se2.exercise_id = se.exercise_id
+                        AND (se2.client_id IS NULL OR se2.client_id = $1)
                         AND ws2.status = 'completed'
                         AND (ws2.lead_client_id = $1 OR EXISTS (
                             SELECT 1 FROM workout_session_clients c2
@@ -990,10 +1036,10 @@ async def client_sessions(
             (
                 SELECT COUNT(*) FROM session_sets ss
                 JOIN session_exercises se ON se.id = ss.session_exercise_id
-                WHERE se.session_id = s.id
+                WHERE se.session_id = s.id AND (se.client_id IS NULL OR se.client_id = $1)
             ) AS sets_count,
             (
-                SELECT COUNT(*) FROM session_exercises se WHERE se.session_id = s.id
+                SELECT COUNT(*) FROM session_exercises se WHERE se.session_id = s.id AND (se.client_id IS NULL OR se.client_id = $1)
             ) AS exercises_count,
             (
                 SELECT COALESCE(
@@ -1002,14 +1048,14 @@ async def client_sessions(
                 )
                 FROM session_exercises se
                 JOIN exercises e ON e.id = se.exercise_id
-                WHERE se.session_id = s.id
+                WHERE se.session_id = s.id AND (se.client_id IS NULL OR se.client_id = $1)
             ) AS focus_muscles,
             (
                 SELECT e.name
                 FROM session_exercises se
                 JOIN exercises e ON e.id = se.exercise_id
                 JOIN session_sets ss ON ss.session_exercise_id = se.id
-                WHERE se.session_id = s.id
+                WHERE se.session_id = s.id AND (se.client_id IS NULL OR se.client_id = $1)
                   AND ss.is_warmup = FALSE
                   AND ss.weight_kg IS NOT NULL
                   AND ss.weight_kg >= COALESCE((
@@ -1018,6 +1064,7 @@ async def client_sessions(
                       JOIN session_exercises se2 ON se2.id = ss2.session_exercise_id
                       JOIN workout_sessions ws2 ON ws2.id = se2.session_id
                       WHERE se2.exercise_id = se.exercise_id
+                        AND (se2.client_id IS NULL OR se2.client_id = $1)
                         AND ws2.status = 'completed'
                         AND ws2.id <> s.id
                         AND (

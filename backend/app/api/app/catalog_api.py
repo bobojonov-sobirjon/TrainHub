@@ -518,9 +518,16 @@ async def my_active_session(user: Annotated[UserPublic, Depends(get_app_user)]) 
     return SuccessResponse(data=await sess.find_active_session_for_user(user.id))
 
 
-@router.get("/sessions/{session_id}", tags=["Shared - Sessions"], summary="Карточка тренировки")
-async def session_detail(session_id: int, user: Annotated[UserPublic, Depends(get_app_user)]) -> SuccessResponse[dict]:
-    return SuccessResponse(data=await sess.get_session(session_id, user.id, ROLE_TRAINER in user.roles))
+@router.get(
+    "/sessions/{session_id}",
+    tags=["Shared - Sessions"],
+    summary="Карточка тренировки",
+    description="`client_id` (тренер) — показать упражнения только этого участника групповой тренировки.",
+)
+async def session_detail(
+    session_id: int, user: Annotated[UserPublic, Depends(get_app_user)], client_id: int | None = None
+) -> SuccessResponse[dict]:
+    return SuccessResponse(data=await sess.get_session(session_id, user.id, ROLE_TRAINER in user.roles, client_id))
 
 
 @router.post(
@@ -541,6 +548,7 @@ async def add_ex(
             payload.rest_sec,
             sets=payload.sets,
             reps=payload.reps,
+            client_id=payload.client_id,
         )
     )
 

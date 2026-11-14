@@ -531,6 +531,11 @@ class SessionExerciseIn(BaseModel):
     rest_sec: int | None = Field(default=None, description="Отдых после упражнения, сек", examples=[90])
     sets: int | None = Field(default=None, description="Запланированные подходы (как в дне программы)", examples=[3], ge=1, le=30)
     reps: int | None = Field(default=None, description="Целевые повторения на подход", examples=[10], ge=1, le=200)
+    client_id: int | None = Field(
+        default=None,
+        description="Чьё упражнение в групповой тренировке (тренер). По умолчанию — основной клиент.",
+        examples=[12],
+    )
 
 
 class TicketStatusIn(BaseModel):

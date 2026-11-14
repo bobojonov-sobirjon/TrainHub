@@ -111,12 +111,13 @@ async def home(user_id: int) -> dict:
         SELECT s.id, s.duration_sec, s.calories, s.finished_at, s.kinds,
                t.first_name AS trainer_first, t.last_name AS trainer_last,
                (
-                   SELECT COUNT(*) FROM session_exercises se WHERE se.session_id = s.id
+                   SELECT COUNT(*) FROM session_exercises se
+                   WHERE se.session_id = s.id AND (se.client_id IS NULL OR se.client_id = $1)
                ) AS exercises_count,
                (
                    SELECT COUNT(*) FROM session_sets ss
                    JOIN session_exercises se ON se.id = ss.session_exercise_id
-                   WHERE se.session_id = s.id
+                   WHERE se.session_id = s.id AND (se.client_id IS NULL OR se.client_id = $1)
                ) AS sets_count
         FROM workout_sessions s
         LEFT JOIN users t ON t.id = s.trainer_id
@@ -138,11 +139,13 @@ async def home(user_id: int) -> dict:
                 JOIN exercises e ON e.id = se.exercise_id
                 JOIN session_sets ss ON ss.session_exercise_id = se.id
                 WHERE se.session_id = $1 AND ss.weight_kg IS NOT NULL
+                  AND (se.client_id IS NULL OR se.client_id = $2)
                 GROUP BY e.name
                 ORDER BY MAX(ss.weight_kg) DESC
                 LIMIT 3
                 """,
                 last_s["id"],
+                user_id,
             )
         ]
     attendance = await client_attendance_30d(user_id)
